@@ -1,0 +1,20 @@
+// Esquema Prisma del motor de reservas de Sarapiquí Race Park.
+// Ver README.md, seccion "Glosario operativo" y "Reglas de negocio definitivas"
+// para el significado de cada entidad antes de modificar este archivo.
+//
+// El modelo completo de entidades (Customer, Service, ScheduleTemplate,
+// ScheduleException, TimeBlock, OperationalBatch, Heat, HeatAllocation,
+// Reservation, Payment, SinpeEvidence, AdministrativeBlock, Notification,
+// User, Role, AuditEvent) se disenara en la Etapa 1 (Diseno detallado) y la
+// Etapa 2 (Nucleo operativo) del plan de implementacion. Este archivo queda
+// inicializado con el datasource y el generator para que `prisma generate`
+// y las migraciones funcionen desde el primer commit.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}

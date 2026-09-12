@@ -1,0 +1,9 @@
+{
+  "project": "srp-reservas",
+  "description": "Reglas de calidad globales para la generacion de codigo de la plataforma de reservas de Sarapiquí Race Park.",
+  "reglas": [
+    "Idioma de desarrollo, variables explicativas, comentarios e interfaz publica/API: Español.",
+    "Arquitectura: API REST Modular en Node.js, aislando el motor logico de disponibilidad en un servicio puro para garantizar pruebas unitarias y la futura expansion de recursos RC.",
+    "Despliegue: Configurar variables de entorno (.env) para la base de datos PostgreSQL, previendo que el backend se hospedara en la seccion de Web Apps de Hostinger Premium y se conectara de manera remota a una base de datos PostgreSQL administrada en la nube (como Supabase o Neon.tech)."
+  ]
+}
