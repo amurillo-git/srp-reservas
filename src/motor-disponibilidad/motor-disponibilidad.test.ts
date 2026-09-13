@@ -3,11 +3,13 @@ import {
   construirPlan,
   horaAMinutos,
   minutosAHora,
+  normalizarLoteTrasLiberacion,
   type BloqueDeCalendario,
   type BloqueHeat,
   type BloqueLimpieza,
   type ContextoDisponibilidad,
   type FechaISO,
+  type HeatParaNormalizar,
   type HoraISO,
 } from "./motor-disponibilidad.js";
 
@@ -584,5 +586,119 @@ describe("Motor de disponibilidad — casos DISP", () => {
       contexto,
     });
     expect(resultado.disponible).toBe(true);
+  });
+});
+
+describe("normalizarLoteTrasLiberacion", () => {
+  function heat(
+    heatId: string,
+    posicionEnLote: number,
+    horaInicio: HoraISO,
+    quedaVacio: boolean,
+  ): HeatParaNormalizar {
+    return {
+      heatId,
+      posicionEnLote,
+      horaInicio,
+      horaFin: minutosAHora(horaAMinutos(horaInicio) + 15),
+      quedaVacio,
+    };
+  }
+
+  it("9.20: heat que conserva participantes tras liberar -> sin cambios", () => {
+    const resultado = normalizarLoteTrasLiberacion({
+      loteId: "lote-1",
+      heats: [heat("heat-1", 1, "14:00", false)], // conserva las 2 confirmadas
+    });
+    expect(resultado).toEqual({ accion: "sin_cambios" });
+  });
+
+  it("9.21: lote de 2 heats que quedan completamente vacios -> se elimina el lote", () => {
+    const resultado = normalizarLoteTrasLiberacion({
+      loteId: "lote-1",
+      heats: [heat("heat-1", 1, "14:30", true), heat("heat-2", 2, "14:45", true)],
+    });
+    expect(resultado).toEqual({ accion: "eliminar_lote" });
+  });
+
+  it("6.7.8: un heat vacio entre dos ocupados permanece como parte del lote", () => {
+    const resultado = normalizarLoteTrasLiberacion({
+      loteId: "lote-1",
+      heats: [
+        heat("heat-1", 1, "10:00", false),
+        heat("heat-2", 2, "10:15", true),
+        heat("heat-3", 3, "10:30", false),
+      ],
+    });
+    expect(resultado).toEqual({ accion: "sin_cambios" });
+  });
+
+  it("6.7.8: recorta solo los heats vacios del inicio y reposiciona (la limpieza no se mueve)", () => {
+    const resultado = normalizarLoteTrasLiberacion({
+      loteId: "lote-1",
+      heats: [
+        heat("heat-1", 1, "10:00", true),
+        heat("heat-2", 2, "10:15", false),
+        heat("heat-3", 3, "10:30", false),
+      ],
+    });
+    expect(resultado).toEqual({
+      accion: "recortar_lote",
+      heatIdsAEliminar: ["heat-1"],
+      heatsConservados: [
+        { heatId: "heat-2", nuevaPosicionEnLote: 1 },
+        { heatId: "heat-3", nuevaPosicionEnLote: 2 },
+      ],
+      horaInicio: "10:15",
+      horaFinUltimoHeat: "10:45",
+      horaInicioLimpieza: "10:45",
+      horaFinLimpieza: "11:00",
+      cantidadHeats: 2,
+    });
+  });
+
+  it("6.7.8: recorta solo los heats vacios del final y desplaza la limpieza antes", () => {
+    const resultado = normalizarLoteTrasLiberacion({
+      loteId: "lote-1",
+      heats: [
+        heat("heat-1", 1, "10:00", false),
+        heat("heat-2", 2, "10:15", false),
+        heat("heat-3", 3, "10:30", true),
+      ],
+    });
+    expect(resultado).toEqual({
+      accion: "recortar_lote",
+      heatIdsAEliminar: ["heat-3"],
+      heatsConservados: [
+        { heatId: "heat-1", nuevaPosicionEnLote: 1 },
+        { heatId: "heat-2", nuevaPosicionEnLote: 2 },
+      ],
+      horaInicio: "10:00",
+      horaFinUltimoHeat: "10:30",
+      horaInicioLimpieza: "10:30",
+      horaFinLimpieza: "10:45",
+      cantidadHeats: 2,
+    });
+  });
+
+  it("6.7.8: recorta heats vacios de ambos extremos a la vez", () => {
+    const resultado = normalizarLoteTrasLiberacion({
+      loteId: "lote-1",
+      heats: [
+        heat("heat-1", 1, "10:00", true),
+        heat("heat-2", 2, "10:15", false),
+        heat("heat-3", 3, "10:30", true),
+      ],
+    });
+    expect(resultado).toEqual({
+      accion: "recortar_lote",
+      heatIdsAEliminar: ["heat-1", "heat-3"],
+      heatsConservados: [{ heatId: "heat-2", nuevaPosicionEnLote: 1 }],
+      horaInicio: "10:15",
+      horaFinUltimoHeat: "10:30",
+      horaInicioLimpieza: "10:30",
+      horaFinLimpieza: "10:45",
+      cantidadHeats: 1,
+    });
   });
 });

@@ -90,6 +90,7 @@ export interface FilaAsignacion {
   heatId: Id;
   participantCount: number;
   estado: EstadoAsignacion;
+  liberadoEn?: Date | null;
 }
 
 export interface FilaReserva {
@@ -297,9 +298,25 @@ export class FakePrisma {
   };
 
   readonly heat = {
-    findMany: async ({ where }: { where: { servicioId: Id; fecha: Date } }) =>
-      this.heats
-        .filter((h) => h.servicioId === where.servicioId && mismaFecha(h.fecha, where.fecha))
+    /** Filtra por cualquier combinacion de `servicioId`+`fecha` (uso de
+     * availability.service.ts, disponibilidad del dia) o `loteId` (uso de
+     * expiracion.service.ts, heats de un lote concreto al normalizarlo). */
+    findMany: async ({
+      where,
+    }: {
+      where: { servicioId?: Id; fecha?: Date; loteId?: Id };
+    }) => {
+      let resultado = this.heats.slice();
+      if (where.servicioId !== undefined) {
+        resultado = resultado.filter((h) => h.servicioId === where.servicioId);
+      }
+      if (where.fecha !== undefined) {
+        resultado = resultado.filter((h) => mismaFecha(h.fecha, where.fecha!));
+      }
+      if (where.loteId !== undefined) {
+        resultado = resultado.filter((h) => h.loteId === where.loteId);
+      }
+      return resultado
         .sort((a, b) => a.horaInicio.localeCompare(b.horaInicio))
         .map((h) => ({
           ...h,
@@ -310,7 +327,10 @@ export class FakePrisma {
               const r = this.reservas.find((res) => res.id === a.reservationId)!;
               return { ...a, reservation: { estado: r.estado, expiraEn: r.expiraEn } };
             }),
-        })),
+        }));
+    },
+    findUnique: async ({ where }: { where: { id: Id } }) =>
+      this.heats.find((h) => h.id === where.id) ?? null,
     create: async ({ data }: { data: Omit<FilaHeat, "id"> }) => {
       this.lanzarSiTocaConflicto("heat");
       const fila: FilaHeat = { id: nuevoId("heat"), ...data };
@@ -322,6 +342,17 @@ export class FakePrisma {
       if (!fila) throw new Error(`Heat ${where.id} no existe (fake)`);
       Object.assign(fila, data);
       return fila;
+    },
+    /** Simula `onDelete: Cascade` de `HeatAllocation.heat` (schema.prisma):
+     * borra tambien cualquier asignacion que quedara apuntando a este heat. */
+    delete: async ({ where }: { where: { id: Id } }) => {
+      const indice = this.heats.findIndex((h) => h.id === where.id);
+      if (indice === -1) throw new Error(`Heat ${where.id} no existe (fake)`);
+      const [fila] = this.heats.splice(indice, 1);
+      for (let i = this.asignaciones.length - 1; i >= 0; i--) {
+        if (this.asignaciones[i]!.heatId === where.id) this.asignaciones.splice(i, 1);
+      }
+      return fila!;
     },
   };
 
@@ -337,9 +368,48 @@ export class FakePrisma {
       Object.assign(fila, data);
       return fila;
     },
+    /** Simula `onDelete: Cascade` de `Heat.lote` (schema.prisma): borra sus
+     * heats (y, por extension, las asignaciones de cada uno). */
+    delete: async ({ where }: { where: { id: Id } }) => {
+      const indice = this.lotes.findIndex((l) => l.id === where.id);
+      if (indice === -1) throw new Error(`Lote ${where.id} no existe (fake)`);
+      const [fila] = this.lotes.splice(indice, 1);
+      const heatIdsDelLote = this.heats.filter((h) => h.loteId === where.id).map((h) => h.id);
+      for (const heatId of heatIdsDelLote) {
+        await this.heat.delete({ where: { id: heatId } });
+      }
+      return fila!;
+    },
   };
 
   readonly heatAllocation = {
+    findMany: async ({
+      where,
+    }: {
+      where: { reservationId: Id; estado?: EstadoAsignacion };
+    }) =>
+      this.asignaciones.filter(
+        (a) => a.reservationId === where.reservationId && (where.estado === undefined || a.estado === where.estado),
+      ),
+    updateMany: async ({
+      where,
+      data,
+    }: {
+      where: { reservationId: Id; estado?: EstadoAsignacion };
+      data: Partial<FilaAsignacion>;
+    }) => {
+      let contador = 0;
+      for (const asignacion of this.asignaciones) {
+        if (
+          asignacion.reservationId === where.reservationId &&
+          (where.estado === undefined || asignacion.estado === where.estado)
+        ) {
+          Object.assign(asignacion, data);
+          contador += 1;
+        }
+      }
+      return { count: contador };
+    },
     create: async ({ data }: { data: Omit<FilaAsignacion, "id" | "estado"> }) => {
       const fila: FilaAsignacion = { id: nuevoId("alloc"), estado: "ACTIVA", ...data };
       this.asignaciones.push(fila);
@@ -356,14 +426,39 @@ export class FakePrisma {
   onReservationFindUnique: (() => void) | null = null;
 
   readonly reservation = {
-    findUnique: async ({ where }: { where: { claveIdempotencia: string } }) => {
-      const encontrada = this.reservas.find((r) => r.claveIdempotencia === where.claveIdempotencia) ?? null;
+    findUnique: async ({ where }: { where: { claveIdempotencia?: string; id?: Id } }) => {
+      const encontrada =
+        this.reservas.find(
+          (r) =>
+            (where.id !== undefined && r.id === where.id) ||
+            (where.claveIdempotencia !== undefined && r.claveIdempotencia === where.claveIdempotencia),
+        ) ?? null;
       this.onReservationFindUnique?.();
       return encontrada;
     },
     findUniqueOrThrow: async ({ where }: { where: { claveIdempotencia: string } }) => {
       const fila = this.reservas.find((r) => r.claveIdempotencia === where.claveIdempotencia);
       if (!fila) throw new Error("No encontrado (fake)");
+      return fila;
+    },
+    /** Filtra por `estado` y, opcionalmente, `expiraEn: { lte }` (uso de
+     * expiracion.service.ts para encontrar reservas TEMPORAL vencidas, 19.1). */
+    findMany: async ({
+      where,
+    }: {
+      where: { estado: string; expiraEn?: { lte: Date } };
+    }) =>
+      this.reservas.filter((r) => {
+        if (r.estado !== where.estado) return false;
+        if (where.expiraEn?.lte !== undefined) {
+          if (r.expiraEn === null || r.expiraEn.getTime() > where.expiraEn.lte.getTime()) return false;
+        }
+        return true;
+      }),
+    update: async ({ where, data }: { where: { id: Id }; data: Partial<FilaReserva> }) => {
+      const fila = this.reservas.find((r) => r.id === where.id);
+      if (!fila) throw new Error(`Reservation ${where.id} no existe (fake)`);
+      Object.assign(fila, data);
       return fila;
     },
     create: async ({ data }: { data: Omit<FilaReserva, "id"> }) => {
@@ -376,36 +471,43 @@ export class FakePrisma {
 
   /** Ejecuta el callback SIN aislamiento real (no hay otras transacciones
    * concurrentes en este doble de un solo hilo). Sí revierte, de forma
-   * best-effort, las filas AGREGADAS durante un intento fallido (trunca
-   * cada tabla a su longitud previa), para que un `heat.create` que lanza
-   * a mitad de transaccion no deje una `Reservation` huerfana — igual que
-   * haria un ROLLBACK real. Limitacion real y deliberada: una mutacion
-   * in-place sobre una fila YA EXISTENTE (ej. `operationalBatch.update` al
-   * ampliar un lote, 8.3/DISP-015) NO se revierte por este mecanismo; ese
-   * escenario de fallo solo esta cubierto por Postgres real (ver
+   * best-effort, los cambios de FILAS (creadas o eliminadas) durante un
+   * intento fallido, restaurando cada tabla a una copia superficial de su
+   * contenido previo — para que un `heat.create`/`heat.delete` que lanza a
+   * mitad de transaccion no deje una `Reservation` huerfana ni arrays
+   * corruptos, igual que haria un ROLLBACK real. (Version anterior: solo
+   * truncaba por longitud, lo cual restauraba bien los `create` pero dejaba
+   * huecos si algo se habia borrado con `splice` — `heat.delete` /
+   * `operationalBatch.delete` — antes del error; una copia del contenido
+   * evita ese problema). Limitacion real y deliberada que SIGUE sin
+   * cubrirse: una mutacion in-place sobre una fila ya existente que no se
+   * borra (ej. `operationalBatch.update` al ampliar un lote, 8.3/DISP-015)
+   * no se revierte, porque la copia superficial conserva la MISMA
+   * referencia de objeto que la mutacion modifico. Ese escenario de fallo
+   * solo esta cubierto por Postgres real (ver
    * availability.service.integration.test.ts). */
   async $transaction<T>(fn: (tx: this) => Promise<T>): Promise<T> {
-    const longitudes = {
-      servicios: this.servicios.length,
-      plantillas: this.plantillas.length,
-      excepciones: this.excepciones.length,
-      bloqueos: this.bloqueos.length,
-      lotes: this.lotes.length,
-      heats: this.heats.length,
-      asignaciones: this.asignaciones.length,
-      reservas: this.reservas.length,
+    const copia = {
+      servicios: [...this.servicios],
+      plantillas: [...this.plantillas],
+      excepciones: [...this.excepciones],
+      bloqueos: [...this.bloqueos],
+      lotes: [...this.lotes],
+      heats: [...this.heats],
+      asignaciones: [...this.asignaciones],
+      reservas: [...this.reservas],
     };
     try {
       return await fn(this);
     } catch (error) {
-      this.servicios.length = longitudes.servicios;
-      this.plantillas.length = longitudes.plantillas;
-      this.excepciones.length = longitudes.excepciones;
-      this.bloqueos.length = longitudes.bloqueos;
-      this.lotes.length = longitudes.lotes;
-      this.heats.length = longitudes.heats;
-      this.asignaciones.length = longitudes.asignaciones;
-      this.reservas.length = longitudes.reservas;
+      this.servicios.splice(0, this.servicios.length, ...copia.servicios);
+      this.plantillas.splice(0, this.plantillas.length, ...copia.plantillas);
+      this.excepciones.splice(0, this.excepciones.length, ...copia.excepciones);
+      this.bloqueos.splice(0, this.bloqueos.length, ...copia.bloqueos);
+      this.lotes.splice(0, this.lotes.length, ...copia.lotes);
+      this.heats.splice(0, this.heats.length, ...copia.heats);
+      this.asignaciones.splice(0, this.asignaciones.length, ...copia.asignaciones);
+      this.reservas.splice(0, this.reservas.length, ...copia.reservas);
       throw error;
     }
   }
