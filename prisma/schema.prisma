@@ -18,3 +18,230 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+// ============================================================================
+// Modelos del motor de disponibilidad (Etapa 1/2 del plan).
+// Alcance deliberado: NO incluye Customer, Payment, SinpeEvidence,
+// Notification, User, Role ni AuditEvent (fuera del alcance de disponibilidad).
+// Convencion: campos/modelos en camelCase (coherente con motor-disponibilidad.ts),
+// columnas fisicas en snake_case via @map/@@map.
+// ============================================================================
+
+enum TipoExcepcionHorario {
+  HABILITADO // abre una fecha que la plantilla semanal no abriria (feriado)
+  MODIFICADO // sobreescribe horario/almuerzo de una fecha que si tiene plantilla
+  CERRADO    // cierra la fecha por completo, aunque la plantilla la abriria
+
+  @@map("tipo_excepcion_horario")
+}
+
+enum EstadoLote {
+  ACTIVO
+  FINALIZADO
+
+  @@map("estado_lote")
+}
+
+enum EstadoHeat {
+  ACTIVO
+  FINALIZADO
+
+  @@map("estado_heat")
+}
+
+enum EstadoAsignacion {
+  ACTIVA
+  LIBERADA
+
+  @@map("estado_asignacion")
+}
+
+enum EstadoReserva {
+  TEMPORAL
+  PENDIENTE_VALIDACION_SINPE
+  CONFIRMADA
+  CANCELADA
+  EXPIRADA
+
+  @@map("estado_reserva")
+}
+
+/// Catalogo de servicios (16.1). Inicialmente solo "karts".
+model Service {
+  id                  String   @id @default(cuid())
+  nombre              String
+  slug                String   @unique
+  moneda              String   @db.VarChar(3)
+  precioPorPersona    Decimal  @map("precio_por_persona") @db.Decimal(10, 2)
+  porcentajeDeposito  Int      @default(50) @map("porcentaje_deposito") // 6.7.4
+  activo              Boolean  @default(true)
+  creadoEn            DateTime @default(now()) @map("creado_en")
+
+  plantillas   ScheduleTemplate[]
+  excepciones  ScheduleException[]
+  bloqueos     AdministrativeBlock[]
+  lotes        OperationalBatch[]
+  heats        Heat[]
+  reservas     Reservation[]
+
+  @@map("services")
+}
+
+/// Horario semanal habitual (6.2): sabado/domingo 9:00-16:00, almuerzo 12:00-12:30.
+/// Un unico intervalo por dia de semana en el MVP; ventanas puntuales extra se
+/// logran con ScheduleException para esa fecha.
+model ScheduleTemplate {
+  id               String   @id @default(cuid())
+  servicioId       String   @map("service_id")
+  /// 0 = domingo ... 6 = sabado (convencion Date#getUTCDay()).
+  diaSemana        Int      @map("dia_semana")
+  horaApertura     String   @map("hora_apertura") @db.VarChar(5)
+  horaCierre       String   @map("hora_cierre") @db.VarChar(5)
+  almuerzoInicio   String?  @map("almuerzo_inicio") @db.VarChar(5)
+  almuerzoFin      String?  @map("almuerzo_fin") @db.VarChar(5)
+  activo           Boolean  @default(true)
+  creadoEn         DateTime @default(now()) @map("creado_en")
+
+  servicio Service @relation(fields: [servicioId], references: [id])
+
+  @@unique([servicioId, diaSemana])
+  @@map("schedule_templates")
+}
+
+/// Excepcion de calendario para una fecha puntual (6.2: los feriados no se
+/// asumen abiertos automaticamente).
+model ScheduleException {
+  id               String                @id @default(cuid())
+  servicioId       String                @map("service_id")
+  fecha            DateTime              @db.Date
+  tipo             TipoExcepcionHorario
+  horaApertura     String?               @map("hora_apertura") @db.VarChar(5)
+  horaCierre       String?               @map("hora_cierre") @db.VarChar(5)
+  almuerzoInicio   String?               @map("almuerzo_inicio") @db.VarChar(5)
+  almuerzoFin      String?               @map("almuerzo_fin") @db.VarChar(5)
+  motivo           String?
+  creadoEn         DateTime              @default(now()) @map("creado_en")
+
+  servicio Service @relation(fields: [servicioId], references: [id])
+
+  @@index([servicioId, fecha])
+  @@map("schedule_exceptions")
+}
+
+/// Cierre temporal o evento privado (16.1).
+model AdministrativeBlock {
+  id          String   @id @default(cuid())
+  servicioId  String   @map("service_id")
+  fecha       DateTime @db.Date
+  horaInicio  String   @map("hora_inicio") @db.VarChar(5)
+  horaFin     String   @map("hora_fin") @db.VarChar(5)
+  motivo      String?
+  creadoEn    DateTime @default(now()) @map("creado_en")
+
+  servicio Service @relation(fields: [servicioId], references: [id])
+
+  @@index([servicioId, fecha])
+  @@map("administrative_blocks")
+}
+
+/// Lote de uno o mas heats consecutivos y su limpieza posterior (16.4).
+model OperationalBatch {
+  id                   String     @id @default(cuid())
+  servicioId           String     @map("service_id")
+  fecha                DateTime   @db.Date
+  horaInicio           String     @map("hora_inicio") @db.VarChar(5)
+  horaFinUltimoHeat    String     @map("hora_fin_ultimo_heat") @db.VarChar(5)
+  horaInicioLimpieza   String     @map("hora_inicio_limpieza") @db.VarChar(5)
+  horaFinLimpieza      String     @map("hora_fin_limpieza") @db.VarChar(5)
+  cantidadHeats        Int        @map("cantidad_heats")
+  estado               EstadoLote @default(ACTIVO)
+  creadoEn             DateTime   @default(now()) @map("creado_en")
+  actualizadoEn        DateTime   @updatedAt @map("actualizado_en")
+
+  servicio Service @relation(fields: [servicioId], references: [id])
+  heats    Heat[]
+
+  @@index([servicioId, fecha])
+  @@map("operational_batches")
+}
+
+/// Heat individual y su capacidad maxima (16.3).
+model Heat {
+  id              String     @id @default(cuid())
+  loteId          String     @map("lote_id")
+  servicioId      String     @map("service_id")
+  fecha           DateTime   @db.Date
+  horaInicio      String     @map("hora_inicio") @db.VarChar(5)
+  horaFin         String     @map("hora_fin") @db.VarChar(5)
+  posicionEnLote  Int        @map("posicion_en_lote")
+  capacidadMaxima Int        @default(5) @map("capacidad_maxima")
+  estado          EstadoHeat @default(ACTIVO)
+  creadoEn        DateTime   @default(now()) @map("creado_en")
+
+  servicio     Service          @relation(fields: [servicioId], references: [id])
+  lote         OperationalBatch @relation(fields: [loteId], references: [id], onDelete: Cascade)
+  asignaciones HeatAllocation[]
+
+  // 16.6: "un heat unico por servicio, fecha y hora".
+  @@unique([servicioId, fecha, horaInicio])
+  @@index([loteId])
+  @@map("heats")
+}
+
+/// Personas de una reserva asignadas a un heat (16.5).
+model HeatAllocation {
+  id                String           @id @default(cuid())
+  reservationId     String           @map("reservation_id")
+  heatId            String           @map("heat_id")
+  participantCount  Int              @map("participant_count")
+  estado            EstadoAsignacion @default(ACTIVA)
+  creadoEn          DateTime         @default(now()) @map("creado_en")
+  liberadoEn        DateTime?        @map("liberado_en")
+
+  reservation Reservation @relation(fields: [reservationId], references: [id])
+  heat        Heat        @relation(fields: [heatId], references: [id])
+
+  @@index([heatId])
+  @@index([reservationId])
+  @@map("heat_allocations")
+}
+
+/// Encabezado de reserva (16.2). Sin Customer/Payment todavia: datos de
+/// contacto minimos inline; el estado de pago se reduce a EstadoReserva.
+model Reservation {
+  id                String        @id @default(cuid())
+  publicCode        String        @unique @map("public_code")
+  servicioId        String        @map("service_id")
+  fecha             DateTime      @db.Date
+  cantidadPersonas  Int           @map("cantidad_personas")
+  estado            EstadoReserva @default(TEMPORAL)
+  moneda            String        @db.VarChar(3)
+  montoTotal        Decimal       @map("monto_total") @db.Decimal(10, 2)
+  montoDeposito     Decimal       @map("monto_deposito") @db.Decimal(10, 2)
+  montoSaldo        Decimal       @map("monto_saldo") @db.Decimal(10, 2)
+  /// Clave de idempotencia (8.8.7): evita doble clic / reintento de red.
+  claveIdempotencia String        @unique @map("clave_idempotencia")
+  clienteNombre     String        @map("cliente_nombre")
+  clienteTelefono   String        @map("cliente_telefono")
+  clienteEmail      String?       @map("cliente_email")
+  expiraEn          DateTime?     @map("expira_en") // 6.7.1: reserva temporal, 30 min
+  creadoEn          DateTime      @default(now()) @map("creado_en")
+  actualizadoEn     DateTime      @updatedAt @map("actualizado_en")
+  confirmadaEn      DateTime?     @map("confirmada_en")
+  canceladaEn       DateTime?     @map("cancelada_en")
+
+  servicio     Service          @relation(fields: [servicioId], references: [id])
+  asignaciones HeatAllocation[]
+
+  @@index([servicioId, fecha])
+  @@map("reservations")
+}
+
+// ----------------------------------------------------------------------------
+// Integridad NO expresable en Prisma 5.x (sin @check nativo) — requiere
+// migracion SQL manual posterior o queda enforced en la transaccion (16.6):
+//   - montos >= 0
+//   - expira_en > creado_en
+//   - suma de participant_count activos por heat <= capacidad_maxima (se
+//     valida en la transaccion de confirmarReserva, no es constraint de fila)
+// ----------------------------------------------------------------------------
