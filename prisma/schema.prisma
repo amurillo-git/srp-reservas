@@ -14,9 +14,16 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// Proyecto Supabase "SRP reservas" (plan free). `url` usa el pooler de
+// Supabase (Transaction mode, puerto 6543) para el runtime de la app;
+// `directUrl` usa la conexion directa (puerto 5432) porque `prisma migrate`
+// y `prisma db push` necesitan sesiones persistentes que el pooler en modo
+// transaccion no soporta de forma confiable. Ambas viven en Project Settings
+// -> Database -> Connection string del proyecto en supabase.com.
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // ============================================================================

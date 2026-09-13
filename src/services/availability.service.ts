@@ -574,6 +574,17 @@ export async function confirmarReserva(
                   },
                 });
                 heatId = nuevoHeat.id;
+              } else {
+                // Heat reutilizado: `i` es su posicion FINAL dentro de este
+                // lote (ya reordenado por el motor), que puede diferir de la
+                // que tenia antes de esta reserva si un heat nuevo quedo
+                // colocado cronologicamente antes de el (6.1.12, ejemplo 9.9).
+                // Sin este update, dos heats del mismo lote podrian terminar
+                // compartiendo el mismo posicionEnLote.
+                await tx.heat.update({
+                  where: { id: heatId },
+                  data: { posicionEnLote: i + 1 },
+                });
               }
 
               await tx.heatAllocation.create({

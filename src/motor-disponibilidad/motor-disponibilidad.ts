@@ -311,7 +311,7 @@ export function construirPlan(
   //    exactamente en la hora candidata (8.5 pasos 3-6, 8.6).
   const planContinuo = buscarEnPosicionFija(mapaBloques, inicioMin, distribucion);
   if (planContinuo.exito) {
-    return construirPlanDisponible([planContinuo.lote], distribucion, cantidadPersonas, contexto);
+    return construirPlanDisponible([planContinuo.lote], cantidadPersonas, contexto);
   }
 
   // 2) Hasta 15 personas: un solo lote es obligatorio (6.1.8); si no cabe, se
@@ -337,7 +337,7 @@ export function construirPlan(
     // candidato: garantiza "menor cantidad de lotes" (8.6, criterio 1).
     if (candidatos.length > 0) {
       const mejor = [...candidatos].sort(compararPlanesLote)[0]!;
-      return construirPlanDisponible(mejor, distribucion, cantidadPersonas, contexto);
+      return construirPlanDisponible(mejor, cantidadPersonas, contexto);
     }
   }
 
@@ -694,14 +694,24 @@ function calcularPrecio(tarifa: TarifaServicio, personas: number): PrecioPropues
   return { moneda: tarifa.moneda, montoTotal, montoDeposito, montoSaldo };
 }
 
-/** Ensambla el `PlanDisponible` final a partir de los lotes ya resueltos. */
+/** Ensambla el `PlanDisponible` final a partir de los lotes ya resueltos.
+ *
+ * `distribucion` se deriva SIEMPRE de los heats realmente colocados (nunca
+ * del vector equilibrado pre-permutacion que calculo `construirPlan`):
+ * cuando el motor prueba una permutacion distinta de la identidad para que
+ * el plan quepa (7.2, DISP-015), los heats quedan en ese orden permutado, y
+ * `distribucion` debe reflejar exactamente ese orden para que un llamador
+ * pueda hacer zip(distribucion, heats) por indice con seguridad. */
 function construirPlanDisponible(
   lotes: readonly LotePropuesto[],
-  distribucion: VectorDistribucion,
   cantidadPersonas: number,
   contexto: ContextoDisponibilidad,
 ): PlanDisponible {
   const ultimoLote = lotes[lotes.length - 1]!;
+
+  const distribucion: VectorDistribucion = lotes.flatMap((lote) =>
+    lote.heats.map((heat) => heat.personasAsignadas),
+  );
 
   const capacidadesRetenidas: RetencionDeCapacidad[] = lotes.flatMap((lote) =>
     lote.heats.map((heat) => ({
