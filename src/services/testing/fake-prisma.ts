@@ -27,9 +27,12 @@ type EstadoAsignacion = "ACTIVA" | "LIBERADA";
 
 export interface FilaServicio {
   id: Id;
+  nombre: string;
+  slug: string;
   moneda: string;
   precioPorPersona: number;
   porcentajeDeposito: number;
+  activo: boolean;
 }
 
 export interface FilaPlantilla {
@@ -166,9 +169,12 @@ export class FakePrisma {
 
   crearServicio(datos: { id: Id } & Partial<Omit<FilaServicio, "id">>): FilaServicio {
     const fila: FilaServicio = {
+      nombre: "Karts",
+      slug: `karts-${datos.id}`,
       moneda: "CRC",
       precioPorPersona: 4000,
       porcentajeDeposito: 50,
+      activo: true,
       ...datos,
     };
     this.servicios.push(fila);
@@ -323,6 +329,8 @@ export class FakePrisma {
   readonly service = {
     findUnique: async ({ where }: { where: { id: Id } }) =>
       this.servicios.find((s) => s.id === where.id) ?? null,
+    findMany: async ({ where }: { where?: { activo?: boolean } } = {}) =>
+      this.servicios.filter((s) => where?.activo === undefined || s.activo === where.activo),
   };
 
   readonly heat = {
@@ -476,12 +484,17 @@ export class FakePrisma {
   onReservationFindUnique: (() => void) | null = null;
 
   readonly reservation = {
-    findUnique: async ({ where }: { where: { claveIdempotencia?: string; id?: Id } }) => {
+    findUnique: async ({
+      where,
+    }: {
+      where: { claveIdempotencia?: string; id?: Id; codigoPublico?: string };
+    }) => {
       const encontrada =
         this.reservas.find(
           (r) =>
             (where.id !== undefined && r.id === where.id) ||
-            (where.claveIdempotencia !== undefined && r.claveIdempotencia === where.claveIdempotencia),
+            (where.claveIdempotencia !== undefined && r.claveIdempotencia === where.claveIdempotencia) ||
+            (where.codigoPublico !== undefined && r.codigoPublico === where.codigoPublico),
         ) ?? null;
       this.onReservationFindUnique?.();
       return encontrada;

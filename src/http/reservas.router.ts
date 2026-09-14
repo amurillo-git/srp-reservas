@@ -1,0 +1,200 @@
+// ============================================================================
+// Rutas publicas de disponibilidad y reservas (seccion 18.1 de propuesta.md).
+//
+// Capa HTTP delgada: valida la FORMA de la solicitud (tipos, formatos) y
+// traduce el resultado de availability.service.ts a codigos de estado HTTP.
+// Ninguna regla de negocio vive aqui — esa vive en el motor puro
+// (motor-disponibilidad.ts) y en la capa de persistencia
+// (availability.service.ts). Esta capa nunca decide si algo cabe o no.
+// ============================================================================
+
+import { Router, type NextFunction, type Request, type Response } from "express";
+import type { PrismaClient } from "@prisma/client";
+import {
+  confirmarReserva,
+  consultarDisponibilidad,
+  consultarReservaPorCodigo,
+  listarFechasConDisponibilidad,
+  listarHorasDisponibles,
+  listarServiciosActivos,
+} from "../services/availability.service.js";
+
+const PATRON_FECHA = /^\d{4}-\d{2}-\d{2}$/;
+const PATRON_ANIO_MES = /^\d{4}-\d{2}$/;
+const PATRON_HORA = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+function enviarError(res: Response, status: number, error: string): void {
+  res.status(status).json({ error });
+}
+
+/** Entero positivo desde un query param (string | string[] | undefined en Express). */
+function comoEnteroPositivo(valor: unknown): number | null {
+  if (typeof valor !== "string") return null;
+  const n = Number(valor);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/** Express 4 no atrapa rechazos de promesas dentro de un handler async: sin
+ * este envoltorio, un error lanzado ahi tumbaria el proceso en vez de
+ * convertirse en una respuesta 500 manejada por el middleware de errores. */
+function conManejoDeErrores(
+  handler: (req: Request, res: Response) => Promise<void>,
+): (req: Request, res: Response, next: NextFunction) => void {
+  return (req, res, next) => {
+    handler(req, res).catch(next);
+  };
+}
+
+export function crearRouterReservas(prisma: PrismaClient): Router {
+  const router = Router();
+
+  router.get(
+    "/services",
+    conManejoDeErrores(async (_req, res) => {
+      const servicios = await listarServiciosActivos(prisma);
+      res.json({ servicios });
+    }),
+  );
+
+  router.get(
+    "/availability/dates",
+    conManejoDeErrores(async (req, res) => {
+      const servicioId = req.query.serviceId;
+      const anioMes = req.query.month;
+      const cantidadPersonas = comoEnteroPositivo(req.query.partySize);
+
+      if (typeof servicioId !== "string" || servicioId.length === 0) {
+        return enviarError(res, 400, "serviceId es requerido");
+      }
+      if (typeof anioMes !== "string" || !PATRON_ANIO_MES.test(anioMes)) {
+        return enviarError(res, 400, "month debe tener el formato YYYY-MM");
+      }
+      if (cantidadPersonas === null) {
+        return enviarError(res, 400, "partySize debe ser un entero positivo");
+      }
+
+      const fechasDisponibles = await listarFechasConDisponibilidad(prisma, servicioId, anioMes, cantidadPersonas);
+      res.json({ fechasDisponibles });
+    }),
+  );
+
+  router.get(
+    "/availability/times",
+    conManejoDeErrores(async (req, res) => {
+      const servicioId = req.query.serviceId;
+      const fecha = req.query.date;
+      const cantidadPersonas = comoEnteroPositivo(req.query.partySize);
+
+      if (typeof servicioId !== "string" || servicioId.length === 0) {
+        return enviarError(res, 400, "serviceId es requerido");
+      }
+      if (typeof fecha !== "string" || !PATRON_FECHA.test(fecha)) {
+        return enviarError(res, 400, "date debe tener el formato YYYY-MM-DD");
+      }
+      if (cantidadPersonas === null) {
+        return enviarError(res, 400, "partySize debe ser un entero positivo");
+      }
+
+      const horasDisponibles = await listarHorasDisponibles(prisma, servicioId, fecha, cantidadPersonas);
+      res.json({ horasDisponibles });
+    }),
+  );
+
+  router.post(
+    "/availability/quote",
+    conManejoDeErrores(async (req, res) => {
+      const { serviceId, date, startTime, partySize } = req.body ?? {};
+
+      if (typeof serviceId !== "string" || serviceId.length === 0) {
+        return enviarError(res, 400, "serviceId es requerido");
+      }
+      if (typeof date !== "string" || !PATRON_FECHA.test(date)) {
+        return enviarError(res, 400, "date debe tener el formato YYYY-MM-DD");
+      }
+      if (typeof startTime !== "string" || !PATRON_HORA.test(startTime)) {
+        return enviarError(res, 400, "startTime debe tener el formato HH:mm");
+      }
+      if (typeof partySize !== "number" || !Number.isInteger(partySize) || partySize <= 0) {
+        return enviarError(res, 400, "partySize debe ser un entero positivo");
+      }
+
+      const plan = await consultarDisponibilidad(prisma, {
+        servicioId: serviceId,
+        fecha: date,
+        horaInicioCandidata: startTime,
+        cantidadPersonas: partySize,
+      });
+      res.json({ plan });
+    }),
+  );
+
+  router.post(
+    "/reservations",
+    conManejoDeErrores(async (req, res) => {
+      // 8.8.7: la clave de idempotencia la controla el cliente (para que un
+      // reintento reutilice la MISMA clave), no el servidor.
+      const claveIdempotencia = req.header("Idempotency-Key");
+      if (!claveIdempotencia) {
+        return enviarError(res, 400, 'El encabezado "Idempotency-Key" es requerido');
+      }
+
+      const { serviceId, date, startTime, partySize, customer } = req.body ?? {};
+
+      if (typeof serviceId !== "string" || serviceId.length === 0) {
+        return enviarError(res, 400, "serviceId es requerido");
+      }
+      if (typeof date !== "string" || !PATRON_FECHA.test(date)) {
+        return enviarError(res, 400, "date debe tener el formato YYYY-MM-DD");
+      }
+      if (typeof startTime !== "string" || !PATRON_HORA.test(startTime)) {
+        return enviarError(res, 400, "startTime debe tener el formato HH:mm");
+      }
+      if (typeof partySize !== "number" || !Number.isInteger(partySize) || partySize <= 0) {
+        return enviarError(res, 400, "partySize debe ser un entero positivo");
+      }
+      if (
+        typeof customer !== "object" ||
+        customer === null ||
+        typeof customer.name !== "string" ||
+        customer.name.trim().length === 0 ||
+        typeof customer.phone !== "string" ||
+        customer.phone.trim().length === 0
+      ) {
+        return enviarError(res, 400, "customer.name y customer.phone son requeridos");
+      }
+      if (customer.email !== undefined && typeof customer.email !== "string") {
+        return enviarError(res, 400, "customer.email debe ser texto");
+      }
+
+      const resultado = await confirmarReserva(prisma, {
+        servicioId: serviceId,
+        fecha: date,
+        horaInicioCandidata: startTime,
+        cantidadPersonas: partySize,
+        cliente: { nombre: customer.name, telefono: customer.phone, email: customer.email },
+        claveIdempotencia,
+      });
+
+      if (resultado.exito) {
+        res.status(201).json(resultado);
+        return;
+      }
+      // NO_DISPONIBLE y CONFLICTO_CONCURRENCIA son ambos "no se pudo crear
+      // ahora mismo, intente de nuevo con datos frescos": 409.
+      res.status(409).json(resultado);
+    }),
+  );
+
+  router.get(
+    "/reservations/:publicCode",
+    conManejoDeErrores(async (req, res) => {
+      const reserva = await consultarReservaPorCodigo(prisma, req.params.publicCode!);
+      if (!reserva) {
+        return enviarError(res, 404, "No existe ninguna reserva con ese codigo");
+      }
+      res.json(reserva);
+    }),
+  );
+
+  return router;
+}

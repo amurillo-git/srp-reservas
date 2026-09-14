@@ -363,6 +363,152 @@ export async function consultarDisponibilidadDelDia(
   return candidatos;
 }
 
+/** Solo las horas de inicio que producen un plan completo (8.7): la lista
+ * que alimenta el dropdown publico de horas. */
+export async function listarHorasDisponibles(
+  prisma: PrismaClient,
+  servicioId: IdServicio,
+  fecha: FechaISO,
+  cantidadPersonas: number,
+): Promise<readonly HoraISO[]> {
+  const candidatos = await consultarDisponibilidadDelDia(prisma, servicioId, fecha, cantidadPersonas);
+  return candidatos.filter((c) => c.plan.disponible).map((c) => c.horaInicioCandidata);
+}
+
+export interface ServicioPublico {
+  readonly id: IdServicio;
+  readonly nombre: string;
+  readonly slug: string;
+  readonly moneda: string;
+  readonly precioPorPersona: number;
+  readonly porcentajeDeposito: number;
+}
+
+/** Catalogo de servicios activos (18.1: `GET /api/services`). En el MVP
+ * siempre devuelve solo karts, pero no asume eso: lee lo que haya marcado
+ * `activo` en la base de datos (27: preparacion para futuros recursos RC). */
+export async function listarServiciosActivos(prisma: PrismaClient): Promise<readonly ServicioPublico[]> {
+  const servicios = await prisma.service.findMany({ where: { activo: true } });
+  return servicios.map((s) => ({
+    id: s.id,
+    nombre: s.nombre,
+    slug: s.slug,
+    moneda: s.moneda,
+    precioPorPersona: Number(s.precioPorPersona),
+    porcentajeDeposito: s.porcentajeDeposito,
+  }));
+}
+
+/** "YYYY-MM" -> ultimo dia de ese mes (28-31). */
+function ultimoDiaDelMes(anioMes: string): number {
+  const [anio, mes] = anioMes.split("-").map(Number);
+  // Dia 0 del mes siguiente = ultimo dia de `mes` (Date normaliza el desborde).
+  return new Date(Date.UTC(anio!, mes!, 0)).getUTCDate();
+}
+
+/**
+ * Fechas del mes que tienen al menos un plan completo para `cantidadPersonas`
+ * (10.3: "una fecha debera considerarse disponible solamente si existe al
+ * menos un plan completo para la cantidad solicitada"). Recorre los dias del
+ * mes SECUENCIALMENTE (no en paralelo) para no disparar 28-31 consultas
+ * simultaneas contra la base de datos; es una vista de calendario, no un
+ * candidato de reserva en el camino critico.
+ */
+export async function listarFechasConDisponibilidad(
+  prisma: PrismaClient,
+  servicioId: IdServicio,
+  anioMes: string,
+  cantidadPersonas: number,
+): Promise<readonly FechaISO[]> {
+  const fechasDisponibles: FechaISO[] = [];
+  const ultimoDia = ultimoDiaDelMes(anioMes);
+
+  for (let dia = 1; dia <= ultimoDia; dia++) {
+    const fecha = `${anioMes}-${String(dia).padStart(2, "0")}`;
+    const candidatos = await consultarDisponibilidadDelDia(prisma, servicioId, fecha, cantidadPersonas);
+    if (candidatos.some((c) => c.plan.disponible)) {
+      fechasDisponibles.push(fecha);
+    }
+  }
+  return fechasDisponibles;
+}
+
+/** Inverso de `fechaISOaDate`: recupera "YYYY-MM-DD" de una medianoche UTC. */
+function dateAFechaISO(fecha: Date): FechaISO {
+  return fecha.toISOString().slice(0, 10);
+}
+
+export interface HeatDeReservaPublico {
+  readonly horaInicio: HoraISO;
+  readonly horaFin: HoraISO;
+  readonly personas: number;
+}
+
+export interface LoteDeReservaPublico {
+  readonly heats: readonly HeatDeReservaPublico[];
+}
+
+export interface ReservaPublica {
+  readonly codigoPublico: string;
+  readonly estado: string;
+  readonly fecha: FechaISO;
+  readonly cantidadPersonas: number;
+  readonly moneda: string;
+  readonly montoTotal: number;
+  readonly montoDeposito: number;
+  readonly montoSaldo: number;
+  /** Ordenados cronologicamente; nunca incluyen la limpieza (8.7, 10.7). */
+  readonly lotes: readonly LoteDeReservaPublico[];
+}
+
+/**
+ * Estado publico de una reserva por su codigo (18.1:
+ * `GET /api/reservations/{publicCode}`, 10.7). `null` si no existe ningun
+ * codigo asi. Reconstruye los lotes/heats desde las asignaciones ACTIVA
+ * persistidas (no vuelve a calcular un plan): una reserva ya confirmada o
+ * vencida no debe cambiar de forma solo porque alguien la consulta.
+ */
+export async function consultarReservaPorCodigo(
+  prisma: PrismaClient,
+  codigoPublico: string,
+): Promise<ReservaPublica | null> {
+  const reserva = await prisma.reservation.findUnique({ where: { codigoPublico } });
+  if (!reserva) return null;
+
+  const asignaciones = await prisma.heatAllocation.findMany({
+    where: { reservationId: reserva.id, estado: "ACTIVA" },
+  });
+
+  const heatsPorLote = new Map<string, HeatDeReservaPublico[]>();
+  for (const asignacion of asignaciones) {
+    const heat = await prisma.heat.findUnique({ where: { id: asignacion.heatId } });
+    if (!heat) continue;
+    const heatsDelLote = heatsPorLote.get(heat.loteId) ?? [];
+    heatsDelLote.push({
+      horaInicio: heat.horaInicio as HoraISO,
+      horaFin: heat.horaFin as HoraISO,
+      personas: asignacion.cantidadParticipantes,
+    });
+    heatsPorLote.set(heat.loteId, heatsDelLote);
+  }
+
+  const lotes: LoteDeReservaPublico[] = [...heatsPorLote.values()]
+    .map((heats) => ({ heats: [...heats].sort((a, b) => a.horaInicio.localeCompare(b.horaInicio)) }))
+    .sort((a, b) => a.heats[0]!.horaInicio.localeCompare(b.heats[0]!.horaInicio));
+
+  return {
+    codigoPublico: reserva.codigoPublico,
+    estado: reserva.estado,
+    fecha: dateAFechaISO(reserva.fecha),
+    cantidadPersonas: reserva.cantidadPersonas,
+    moneda: reserva.moneda,
+    montoTotal: Number(reserva.montoTotal),
+    montoDeposito: Number(reserva.montoDeposito),
+    montoSaldo: Number(reserva.montoSaldo),
+    lotes,
+  };
+}
+
 /** Toma locks pesimistas sobre los Heat/OperationalBatch EXISTENTES indicados.
  * Los ids se ordenan antes de bloquear para reducir la ventana de deadlock
  * entre transacciones concurrentes que bloqueen conjuntos solapados (no es
