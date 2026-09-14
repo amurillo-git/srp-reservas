@@ -210,7 +210,11 @@ model HeatAllocation {
   liberadoEn            DateTime?        @map("liberado_en")
 
   reservation Reservation @relation(fields: [reservationId], references: [id])
-  heat        Heat        @relation(fields: [heatId], references: [id])
+  // onDelete Cascade: al vencer una reserva temporal, un heat que queda
+  // completamente vacio se elimina (6.7.7-8); sus asignaciones (incluso las
+  // ya LIBERADA que quedan como rastro historico minimo, sin AuditEvent
+  // todavia) dejan de tener sentido y deben desaparecer con el.
+  heat        Heat        @relation(fields: [heatId], references: [id], onDelete: Cascade)
 
   @@index([heatId])
   @@index([reservationId])

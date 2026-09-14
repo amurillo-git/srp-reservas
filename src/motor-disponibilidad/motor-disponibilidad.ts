@@ -748,3 +748,120 @@ function construirPlanDisponible(
     ...(precio !== undefined ? { precio } : {}),
   };
 }
+
+// ----------------------------------------------------------------------------
+// 11. Normalizacion de lotes tras liberacion (6.7.6-8, 11.2, 19.1)
+// ----------------------------------------------------------------------------
+// Al vencer una reserva temporal (o rechazarse un SINPE), sus asignaciones se
+// liberan. Esta funcion pura decide que le pasa al LOTE que contenia esos
+// heats, sin tocar la base de datos: el servicio de expiracion es quien la
+// invoca dentro de una transaccion y aplica el resultado (16.6, 19.1).
+
+/** Heat de un lote, tal como esta la INSTANTE de liberar las asignaciones
+ * (ya reflejando cuales quedaron sin ningun participante activo). */
+export interface HeatParaNormalizar {
+  readonly heatId: IdHeat;
+  /** Orden original dentro del lote, 1-based (debe venir ya ordenado ascendente). */
+  readonly posicionEnLote: number;
+  readonly horaInicio: HoraISO;
+  readonly horaFin: HoraISO;
+  /** true si, tras liberar las asignaciones que vencieron, no le queda
+   * ningun participante activo (ni confirmado ni retenido). */
+  readonly quedaVacio: boolean;
+}
+
+export interface LoteParaNormalizar {
+  readonly loteId: IdLote;
+  /** Heats del lote, ordenados por `posicionEnLote` ascendente (6.1.12). */
+  readonly heats: readonly HeatParaNormalizar[];
+}
+
+/** El lote no tiene ningun heat con participantes: se elimina por completo,
+ * heats y limpieza incluidos (6.7.7). */
+export interface NormalizacionEliminarLote {
+  readonly accion: "eliminar_lote";
+}
+
+/** Ningun heat vacio esta al inicio o al final: el lote no cambia de forma.
+ * Un heat vacio "en medio" de dos ocupados permanece como parte del lote y
+ * puede recibir nuevas reservas (6.7.8, ultima oracion). */
+export interface NormalizacionSinCambios {
+  readonly accion: "sin_cambios";
+}
+
+/** Se retiran los heats vacios del inicio y/o del final; los heats que
+ * quedan se renumeran desde 1 y la limpieza se reposiciona justo despues
+ * del nuevo ultimo heat (6.7.8). */
+export interface NormalizacionRecortarLote {
+  readonly accion: "recortar_lote";
+  readonly heatIdsAEliminar: readonly IdHeat[];
+  /** Heats que permanecen, con su nueva posicion 1-based dentro del lote recortado. */
+  readonly heatsConservados: readonly { readonly heatId: IdHeat; readonly nuevaPosicionEnLote: number }[];
+  readonly horaInicio: HoraISO;
+  readonly horaFinUltimoHeat: HoraISO;
+  readonly horaInicioLimpieza: HoraISO;
+  readonly horaFinLimpieza: HoraISO;
+  readonly cantidadHeats: number;
+}
+
+export type ResultadoNormalizacionLote =
+  | NormalizacionEliminarLote
+  | NormalizacionSinCambios
+  | NormalizacionRecortarLote;
+
+/**
+ * Decide que le pasa a un lote despues de liberar algunas de sus
+ * asignaciones (6.7.6-8):
+ *   - Si TODOS sus heats quedan vacios, el lote se elimina completo (6.7.7).
+ *   - Si ninguno de los heats vacios esta en el extremo inicial ni en el
+ *     final, el lote no cambia de forma (un heat vacio "en medio" se
+ *     conserva, 6.7.8).
+ *   - En otro caso, se recortan los heats vacios de cada extremo y se
+ *     reposiciona la limpieza justo despues del nuevo ultimo heat.
+ *
+ * No toca base de datos ni recibe nada mas que el estado ya calculado de
+ * "quedaVacio" por heat; el servicio de expiracion es quien arma ese estado
+ * a partir de las asignaciones activas restantes y aplica el resultado.
+ */
+export function normalizarLoteTrasLiberacion(
+  lote: LoteParaNormalizar,
+): ResultadoNormalizacionLote {
+  const heats = lote.heats;
+
+  if (heats.length === 0 || heats.every((h) => h.quedaVacio)) {
+    return { accion: "eliminar_lote" };
+  }
+
+  const primerOcupado = heats.findIndex((h) => !h.quedaVacio);
+  let ultimoOcupado = -1;
+  for (let i = heats.length - 1; i >= 0; i--) {
+    if (!heats[i]!.quedaVacio) {
+      ultimoOcupado = i;
+      break;
+    }
+  }
+
+  if (primerOcupado === 0 && ultimoOcupado === heats.length - 1) {
+    return { accion: "sin_cambios" };
+  }
+
+  const conservados = heats.slice(primerOcupado, ultimoOcupado + 1);
+  const eliminados = [...heats.slice(0, primerOcupado), ...heats.slice(ultimoOcupado + 1)];
+  const primerConservado = conservados[0]!;
+  const ultimoConservado = conservados[conservados.length - 1]!;
+  const horaFinUltimoHeat = ultimoConservado.horaFin;
+
+  return {
+    accion: "recortar_lote",
+    heatIdsAEliminar: eliminados.map((h) => h.heatId),
+    heatsConservados: conservados.map((h, i) => ({
+      heatId: h.heatId,
+      nuevaPosicionEnLote: i + 1,
+    })),
+    horaInicio: primerConservado.horaInicio,
+    horaFinUltimoHeat,
+    horaInicioLimpieza: horaFinUltimoHeat,
+    horaFinLimpieza: minutosAHora(horaAMinutos(horaFinUltimoHeat) + DURACION_BLOQUE_MINUTOS),
+    cantidadHeats: conservados.length,
+  };
+}
