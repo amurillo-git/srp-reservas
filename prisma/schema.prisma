@@ -277,6 +277,30 @@ model SinpeEvidence {
   @@map("sinpe_evidences")
 }
 
+enum Rol {
+  ADMINISTRADOR
+  ATENCION
+  CAJA
+  OPERACION
+
+  @@map("rol")
+}
+
+/// Usuario administrativo (14.7, 20.1): autenticacion minima para proteger
+/// las rutas /api/admin/*. Sin recuperacion de contrasena ni permisos
+/// granulares mas alla del rol (fuera de alcance de esta slice).
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  /// Formato "sal:hash" (hex), derivado con crypto.scrypt (ver auth.service.ts).
+  passwordHash String   @map("password_hash")
+  rol          Rol      @default(ATENCION)
+  activo       Boolean  @default(true)
+  creadoEn     DateTime @default(now()) @map("creado_en")
+
+  @@map("users")
+}
+
 // ----------------------------------------------------------------------------
 // Integridad NO expresable en Prisma 5.x (sin @check nativo) — requiere
 // migracion SQL manual posterior o queda enforced en la transaccion (16.6):

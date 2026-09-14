@@ -2,6 +2,7 @@ import "dotenv/config";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { PrismaClient } from "@prisma/client";
 import { crearRouterReservas } from "./http/reservas.router.js";
+import { asegurarAdminInicial } from "./services/auth.service.js";
 
 const app = express();
 const prisma = new PrismaClient();
@@ -24,13 +25,18 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   res.status(500).json({ error: "Error interno del servidor" });
 });
 
-// No escuchar puerto durante las pruebas (Vitest fija NODE_ENV=test): los
-// tests HTTP importan `app` y lo montan ellos mismos via supertest.
+// No escuchar puerto ni tocar la base de datos durante las pruebas (Vitest
+// fija NODE_ENV=test): los tests HTTP importan `app` y lo montan ellos
+// mismos via supertest, con FakePrisma en vez de este PrismaClient real.
 if (process.env.NODE_ENV !== "test") {
   const port = Number(process.env.PORT ?? 3000);
-  app.listen(port, () => {
-    console.log(`API de Sarapiquí Race Park escuchando en el puerto ${port}`);
-  });
+  asegurarAdminInicial(prisma)
+    .catch((error: unknown) => console.error("No se pudo asegurar el admin inicial:", error))
+    .finally(() => {
+      app.listen(port, () => {
+        console.log(`API de Sarapiquí Race Park escuchando en el puerto ${port}`);
+      });
+    });
 }
 
 export { app };

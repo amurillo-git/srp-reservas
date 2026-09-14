@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import express, { type Express } from "express";
 import request from "supertest";
 import type { PrismaClient } from "@prisma/client";
 import { crearRouterReservas } from "./reservas.router.js";
 import { FakePrisma } from "../services/testing/fake-prisma.js";
+import { emitirToken, hashearContrasena } from "../services/auth.service.js";
 
 // Pruebas HTTP de las rutas publicas (18.1) contra una app Express propia de
 // esta suite (NO la de src/server.ts, que instancia un PrismaClient real) con
@@ -11,6 +12,10 @@ import { FakePrisma } from "../services/testing/fake-prisma.js";
 // request/response — codigos de estado, validacion de forma — no la logica
 // de negocio, que ya esta probada en motor-disponibilidad.test.ts y
 // availability.service.test.ts.
+
+beforeAll(() => {
+  process.env.JWT_SECRET = "secreto-de-prueba-no-usar-en-produccion";
+});
 
 function crearApp(prisma: PrismaClient): Express {
   const app = express();
@@ -21,6 +26,15 @@ function crearApp(prisma: PrismaClient): Express {
 
 function comoPrisma(fake: FakePrisma): PrismaClient {
   return fake as unknown as PrismaClient;
+}
+
+/** Crea un admin en el fake y devuelve un encabezado Authorization valido
+ * para las rutas /api/admin/*, sin pasar por el endpoint de login. */
+async function tokenAdminDePrueba(fake: FakePrisma, rol: string = "ADMINISTRADOR") {
+  const userId = `admin-${rol}`;
+  const email = `${rol.toLowerCase()}@srp.test`;
+  fake.crearUsuario({ id: userId, email, passwordHash: await hashearContrasena("clave-admin"), rol });
+  return `Bearer ${emitirToken({ userId, email, rol })}`;
 }
 
 const SERVICIO_ID = "svc-1";
@@ -228,11 +242,12 @@ describe("flujo SINPE (POST .../sinpe-evidence, admin confirm/reject-sinpe)", ()
     return creacion.body.codigoPublico as string;
   }
 
-  it("reporta el comprobante, queda pendiente de validacion, y un admin lo aprueba (6.9.1-7)", async () => {
+  it("reporta el comprobante, queda pendiente de validacion, y un admin autenticado lo aprueba (6.9.1-7)", async () => {
     const fake = new FakePrisma();
     crearFixtureBase(fake);
     const app = crearApp(comoPrisma(fake));
     const codigoPublico = await crearReservaTemporal(app);
+    const auth = await tokenAdminDePrueba(fake);
 
     const reporte = await request(app)
       .post(`/api/reservations/${codigoPublico}/sinpe-evidence`)
@@ -242,23 +257,30 @@ describe("flujo SINPE (POST .../sinpe-evidence, admin confirm/reject-sinpe)", ()
       "PENDIENTE_VALIDACION_SINPE",
     );
 
-    const aprobacion = await request(app).post(`/api/admin/reservations/${codigoPublico}/confirm-sinpe`);
+    const aprobacion = await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/confirm-sinpe`)
+      .set("Authorization", auth);
     expect(aprobacion.status).toBe(200);
     expect(fake.reservas.find((r) => r.codigoPublico === codigoPublico)!.estado).toBe("CONFIRMADA");
   });
 
-  it("un admin puede rechazar un comprobante pendiente, exigiendo un motivo (6.9.8)", async () => {
+  it("un admin autenticado puede rechazar un comprobante pendiente, exigiendo un motivo (6.9.8)", async () => {
     const fake = new FakePrisma();
     crearFixtureBase(fake);
     const app = crearApp(comoPrisma(fake));
     const codigoPublico = await crearReservaTemporal(app);
+    const auth = await tokenAdminDePrueba(fake, "CAJA");
     await request(app).post(`/api/reservations/${codigoPublico}/sinpe-evidence`).send({});
 
-    const sinMotivo = await request(app).post(`/api/admin/reservations/${codigoPublico}/reject-sinpe`).send({});
+    const sinMotivo = await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/reject-sinpe`)
+      .set("Authorization", auth)
+      .send({});
     expect(sinMotivo.status).toBe(400);
 
     const rechazo = await request(app)
       .post(`/api/admin/reservations/${codigoPublico}/reject-sinpe`)
+      .set("Authorization", auth)
       .send({ motivo: "Comprobante ilegible" });
     expect(rechazo.status).toBe(200);
     const reserva = fake.reservas.find((r) => r.codigoPublico === codigoPublico)!;
@@ -277,8 +299,66 @@ describe("flujo SINPE (POST .../sinpe-evidence, admin confirm/reject-sinpe)", ()
     crearFixtureBase(fake);
     const app = crearApp(comoPrisma(fake));
     const codigoPublico = await crearReservaTemporal(app); // sigue TEMPORAL, nunca se reporto comprobante
+    const auth = await tokenAdminDePrueba(fake);
 
-    const respuesta = await request(app).post(`/api/admin/reservations/${codigoPublico}/confirm-sinpe`);
+    const respuesta = await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/confirm-sinpe`)
+      .set("Authorization", auth);
     expect(respuesta.status).toBe(409);
+  });
+
+  it("rechaza sin token (401) y con un rol sin permiso (403)", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const codigoPublico = await crearReservaTemporal(app);
+
+    const sinToken = await request(app).post(`/api/admin/reservations/${codigoPublico}/confirm-sinpe`);
+    expect(sinToken.status).toBe(401);
+
+    const tokenInvalido = await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/confirm-sinpe`)
+      .set("Authorization", "Bearer esto-no-es-un-token-valido");
+    expect(tokenInvalido.status).toBe(401);
+
+    const authSinPermiso = await tokenAdminDePrueba(fake, "ATENCION"); // rol fuera de ROLES_VALIDAN_SINPE
+    const sinPermiso = await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/confirm-sinpe`)
+      .set("Authorization", authSinPermiso);
+    expect(sinPermiso.status).toBe(403);
+  });
+});
+
+describe("POST /api/admin/login", () => {
+  it("valida email y password", async () => {
+    const app = crearApp(comoPrisma(new FakePrisma()));
+    expect((await request(app).post("/api/admin/login").send({ email: "a@srp.test" })).status).toBe(400);
+  });
+
+  it("devuelve un token con credenciales correctas", async () => {
+    const fake = new FakePrisma();
+    fake.crearUsuario({
+      id: "u1", email: "admin@srp.test",
+      passwordHash: await hashearContrasena("clave-correcta"), rol: "ADMINISTRADOR",
+    });
+
+    const respuesta = await request(crearApp(comoPrisma(fake)))
+      .post("/api/admin/login")
+      .send({ email: "admin@srp.test", password: "clave-correcta" });
+
+    expect(respuesta.status).toBe(200);
+    expect(respuesta.body.token).toBeTruthy();
+    expect(respuesta.body.rol).toBe("ADMINISTRADOR");
+  });
+
+  it("devuelve 401 con credenciales incorrectas", async () => {
+    const fake = new FakePrisma();
+    fake.crearUsuario({ id: "u1", email: "admin@srp.test", passwordHash: await hashearContrasena("clave-correcta") });
+
+    const respuesta = await request(crearApp(comoPrisma(fake)))
+      .post("/api/admin/login")
+      .send({ email: "admin@srp.test", password: "incorrecta" });
+
+    expect(respuesta.status).toBe(401);
   });
 });

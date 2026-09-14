@@ -19,6 +19,11 @@ import {
   listarServiciosActivos,
 } from "../services/availability.service.js";
 import { aprobarSinpe, rechazarSinpe, reportarComprobanteSinpe } from "../services/pagos.service.js";
+import { iniciarSesion } from "../services/auth.service.js";
+import { requireAuth } from "./auth.middleware.js";
+
+/** 14.7: solo Administrador y Caja validan depositos SINPE. */
+const ROLES_VALIDAN_SINPE = ["ADMINISTRADOR", "CAJA"] as const;
 
 const PATRON_FECHA = /^\d{4}-\d{2}-\d{2}$/;
 const PATRON_ANIO_MES = /^\d{4}-\d{2}$/;
@@ -223,11 +228,26 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
     }),
   );
 
-  // 18.3: rutas administrativas. NOTA: sin autenticacion/autorizacion todavia
-  // (no existe User/Role en el esquema, fuera de alcance de esta slice) —
-  // deben protegerse antes de exponerse en un entorno real.
+  // 18.3: rutas administrativas, protegidas con requireAuth.
+  router.post(
+    "/admin/login",
+    conManejoDeErrores(async (req, res) => {
+      const { email, password } = req.body ?? {};
+      if (typeof email !== "string" || email.length === 0 || typeof password !== "string" || password.length === 0) {
+        return enviarError(res, 400, "email y password son requeridos");
+      }
+
+      const resultado = await iniciarSesion(prisma, email, password);
+      if (!resultado.ok) {
+        return enviarError(res, 401, "Credenciales invalidas");
+      }
+      res.json({ token: resultado.token, rol: resultado.rol });
+    }),
+  );
+
   router.post(
     "/admin/reservations/:publicCode/confirm-sinpe",
+    requireAuth(ROLES_VALIDAN_SINPE),
     conManejoDeErrores(async (req, res) => {
       const resultado = await aprobarSinpe(prisma, req.params.publicCode!);
       if (resultado.ok) {
@@ -241,6 +261,7 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
 
   router.post(
     "/admin/reservations/:publicCode/reject-sinpe",
+    requireAuth(ROLES_VALIDAN_SINPE),
     conManejoDeErrores(async (req, res) => {
       const { motivo } = req.body ?? {};
       if (typeof motivo !== "string" || motivo.trim().length === 0) {

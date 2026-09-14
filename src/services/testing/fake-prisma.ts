@@ -25,6 +25,14 @@ type Id = string;
 type TipoExcepcion = "HABILITADO" | "MODIFICADO" | "CERRADO";
 type EstadoAsignacion = "ACTIVA" | "LIBERADA";
 
+export interface FilaUsuario {
+  id: Id;
+  email: string;
+  passwordHash: string;
+  rol: string;
+  activo: boolean;
+}
+
 export interface FilaServicio {
   id: Id;
   nombre: string;
@@ -175,6 +183,7 @@ export class FakePrisma {
   readonly asignaciones: FilaAsignacion[] = [];
   readonly reservas: FilaReserva[] = [];
   readonly comprobantesSinpe: FilaComprobanteSinpe[] = [];
+  readonly usuarios: FilaUsuario[] = [];
 
   private proximoConflictoUnico: { tabla: "heat" | "reservation"; target: string; vecesRestantes: number } | null =
     null;
@@ -556,6 +565,26 @@ export class FakePrisma {
     },
   };
 
+  readonly user = {
+    findUnique: async ({ where }: { where: { email: string } }) =>
+      this.usuarios.find((u) => u.email === where.email) ?? null,
+    findFirst: async () => this.usuarios[0] ?? null,
+    create: async ({ data }: { data: Omit<FilaUsuario, "id" | "rol" | "activo"> & { rol?: string; activo?: boolean } }) => {
+      const fila: FilaUsuario = { id: nuevoId("user"), rol: "ATENCION", activo: true, ...data };
+      this.usuarios.push(fila);
+      return fila;
+    },
+  };
+
+  /** Fixture: agrega un usuario ya creado (sin pasar por `hashearContrasena`
+   * real de auth.service.ts, para pruebas que solo necesitan un login exitoso
+   * con un hash predecible). */
+  crearUsuario(datos: { id: Id; email: string; passwordHash: string } & Partial<Pick<FilaUsuario, "rol" | "activo">>): FilaUsuario {
+    const fila: FilaUsuario = { rol: "ATENCION", activo: true, ...datos };
+    this.usuarios.push(fila);
+    return fila;
+  }
+
   /** Ejecuta el callback SIN aislamiento real (no hay otras transacciones
    * concurrentes en este doble de un solo hilo). Sí revierte, de forma
    * best-effort, los cambios de FILAS (creadas o eliminadas) durante un
@@ -584,6 +613,7 @@ export class FakePrisma {
       asignaciones: [...this.asignaciones],
       reservas: [...this.reservas],
       comprobantesSinpe: [...this.comprobantesSinpe],
+      usuarios: [...this.usuarios],
     };
     try {
       return await fn(this);
@@ -597,6 +627,7 @@ export class FakePrisma {
       this.asignaciones.splice(0, this.asignaciones.length, ...copia.asignaciones);
       this.reservas.splice(0, this.reservas.length, ...copia.reservas);
       this.comprobantesSinpe.splice(0, this.comprobantesSinpe.length, ...copia.comprobantesSinpe);
+      this.usuarios.splice(0, this.usuarios.length, ...copia.usuarios);
       throw error;
     }
   }
