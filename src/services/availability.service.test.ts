@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
-import { confirmarReserva, consultarDisponibilidad } from "./availability.service.js";
+import { confirmarReserva, consultarDisponibilidad, consultarDisponibilidadDelDia } from "./availability.service.js";
 import { FakePrisma } from "./testing/fake-prisma.js";
 
 // Pruebas unitarias de availability.service.ts contra el doble en memoria
@@ -124,20 +124,20 @@ describe("consultarDisponibilidad", () => {
     const ahora = Date.now();
     fake.crearReservaConAsignacion({
       heatId: heat.id, servicioId: SERVICIO_ID, fecha: FECHA_DATE,
-      participantCount: 1, estado: "CONFIRMADA",
+      cantidadParticipantes: 1, estado: "CONFIRMADA",
     });
     fake.crearReservaConAsignacion({
       heatId: heat.id, servicioId: SERVICIO_ID, fecha: FECHA_DATE,
-      participantCount: 1, estado: "TEMPORAL", expiraEn: new Date(ahora + 10 * 60 * 1000),
+      cantidadParticipantes: 1, estado: "TEMPORAL", expiraEn: new Date(ahora + 10 * 60 * 1000),
     });
     fake.crearReservaConAsignacion({
       // Retencion vencida: NO debe contarse (6.7.6, glosario "reserva temporal").
       heatId: heat.id, servicioId: SERVICIO_ID, fecha: FECHA_DATE,
-      participantCount: 2, estado: "TEMPORAL", expiraEn: new Date(ahora - 10 * 60 * 1000),
+      cantidadParticipantes: 2, estado: "TEMPORAL", expiraEn: new Date(ahora - 10 * 60 * 1000),
     });
     fake.crearReservaConAsignacion({
       heatId: heat.id, servicioId: SERVICIO_ID, fecha: FECHA_DATE,
-      participantCount: 1, estado: "PENDIENTE_VALIDACION_SINPE",
+      cantidadParticipantes: 1, estado: "PENDIENTE_VALIDACION_SINPE",
     });
 
     // Ocupado real = 1 (confirmada) + 1 (temporal vigente) + 1 (SINPE pendiente) = 3; libres = 2.
@@ -212,6 +212,43 @@ describe("consultarDisponibilidad", () => {
     expect("liberacionOperativa" in resultado).toBe(false);
     expect("horaFinLimpieza" in resultado.lotes[0]!).toBe(false);
   });
+
+  it("una excepcion cuya `fecha` tiene una hora distinta de medianoche igual se reconoce (misma fecha calendario, @db.Date no guarda hora)", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    // Fecha con hora 08:30 UTC en vez de medianoche: en Postgres real (columna
+    // @db.Date) esto seria indistinguible de FECHA_DATE; el fake debe
+    // reconocerlas como la misma fecha (ver `mismaFecha`).
+    const fechaConHora = new Date("2026-09-13T08:30:00.000Z");
+    fake.crearExcepcion({ id: "exc-1", servicioId: SERVICIO_ID, fecha: fechaConHora, tipo: "CERRADO" });
+
+    const resultado = await consultarDisponibilidad(comoPrisma(fake), {
+      servicioId: SERVICIO_ID, fecha: FECHA_ISO, horaInicioCandidata: "09:00", cantidadPersonas: 5,
+    });
+
+    expect(resultado.disponible).toBe(false);
+  });
+});
+
+describe("consultarDisponibilidadDelDia", () => {
+  it("construye el ContextoDisponibilidad UNA SOLA VEZ y lo reutiliza para los 96 candidatos del dia (8.7)", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const espia = vi.spyOn(fake.heat, "findMany");
+
+    const candidatos = await consultarDisponibilidadDelDia(comoPrisma(fake), SERVICIO_ID, FECHA_ISO, 5);
+
+    // Un candidato por cada intervalo de 15 minutos del dia completo.
+    expect(candidatos).toHaveLength(96);
+    // La query de heats (parte de construirContextoDisponibilidad) se disparo
+    // una sola vez, no una vez por candidato evaluado.
+    expect(espia).toHaveBeenCalledTimes(1);
+
+    const candidato0900 = candidatos.find((c) => c.horaInicioCandidata === "09:00")!;
+    expect(candidato0900.plan.disponible).toBe(true);
+    const candidatoCerrado = candidatos.find((c) => c.horaInicioCandidata === "02:00")!;
+    expect(candidatoCerrado.plan.disponible).toBe(false);
+  });
 });
 
 describe("confirmarReserva", () => {
@@ -225,10 +262,10 @@ describe("confirmarReserva", () => {
       claveIdempotencia: "idem-1",
     });
 
-    expect(resultado.ok).toBe(true);
-    if (!resultado.ok) return;
-    expect(resultado.reservationId).toBeTruthy();
-    expect(resultado.publicCode).toBeTruthy();
+    expect(resultado.exito).toBe(true);
+    if (!resultado.exito) return;
+    expect(resultado.idReserva).toBeTruthy();
+    expect(resultado.codigoPublico).toBeTruthy();
     expect("liberacionOperativa" in resultado.plan).toBe(false);
 
     expect(fake.reservas).toHaveLength(1);
@@ -236,7 +273,7 @@ describe("confirmarReserva", () => {
     expect(fake.lotes).toHaveLength(1);
     expect(fake.heats).toHaveLength(1);
     expect(fake.asignaciones).toHaveLength(1);
-    expect(fake.asignaciones[0]!.participantCount).toBe(5);
+    expect(fake.asignaciones[0]!.cantidadParticipantes).toBe(5);
   });
 
   it("una segunda confirmacion con la misma clave de idempotencia no crea una segunda reserva (8.8.7)", async () => {
@@ -251,10 +288,10 @@ describe("confirmarReserva", () => {
     const primera = await confirmarReserva(comoPrisma(fake), solicitud);
     const segunda = await confirmarReserva(comoPrisma(fake), solicitud);
 
-    expect(primera.ok).toBe(true);
-    expect(segunda.ok).toBe(true);
-    if (!primera.ok || !segunda.ok) return;
-    expect(segunda.reservationId).toBe(primera.reservationId);
+    expect(primera.exito).toBe(true);
+    expect(segunda.exito).toBe(true);
+    if (!primera.exito || !segunda.exito) return;
+    expect(segunda.idReserva).toBe(primera.idReserva);
     expect(fake.reservas).toHaveLength(1);
     expect(fake.heats).toHaveLength(1);
   });
@@ -272,8 +309,8 @@ describe("confirmarReserva", () => {
       claveIdempotencia: "idem-cerrado",
     });
 
-    expect(resultado.ok).toBe(false);
-    if (resultado.ok) return;
+    expect(resultado.exito).toBe(false);
+    if (resultado.exito) return;
     expect(resultado.motivo).toBe("NO_DISPONIBLE");
     expect(fake.reservas).toHaveLength(0);
   });
@@ -289,7 +326,7 @@ describe("confirmarReserva", () => {
       claveIdempotencia: "idem-retry",
     });
 
-    expect(resultado.ok).toBe(true);
+    expect(resultado.exito).toBe(true);
     // El intento fallido no debe dejar una reserva huerfana (rollback del fake).
     expect(fake.reservas).toHaveLength(1);
     expect(fake.heats).toHaveLength(1);
@@ -311,8 +348,8 @@ describe("confirmarReserva", () => {
       intentosMaximos,
     );
 
-    expect(resultado.ok).toBe(false);
-    if (resultado.ok) return;
+    expect(resultado.exito).toBe(false);
+    if (resultado.exito) return;
     expect(resultado.motivo).toBe("CONFLICTO_CONCURRENCIA");
     expect(fake.reservas).toHaveLength(0);
     expect(fake.heats).toHaveLength(0);
@@ -332,7 +369,7 @@ describe("confirmarReserva", () => {
     });
     fake.crearReservaConAsignacion({
       heatId: "heat-existente", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
-      participantCount: 2, estado: "CONFIRMADA",
+      cantidadParticipantes: 2, estado: "CONFIRMADA",
     });
 
     // 7 personas desde las 09:00: necesita 2 heats ([4,3]); el primero es
@@ -345,8 +382,8 @@ describe("confirmarReserva", () => {
       claveIdempotencia: "idem-posicion",
     });
 
-    expect(resultado.ok).toBe(true);
-    if (!resultado.ok) return;
+    expect(resultado.exito).toBe(true);
+    if (!resultado.exito) return;
 
     expect(fake.heats).toHaveLength(2);
     const heatExistente = fake.heats.find((h) => h.id === "heat-existente")!;
@@ -372,7 +409,7 @@ describe("confirmarReserva", () => {
     });
     fake.crearReservaConAsignacion({
       heatId: "heat-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
-      participantCount: 2, estado: "CONFIRMADA",
+      cantidadParticipantes: 2, estado: "CONFIRMADA",
     });
 
     // En el momento del lock (primera ronda), otra transaccion "gana" los 3
@@ -380,7 +417,7 @@ describe("confirmarReserva", () => {
     fake.onQueryRaw = () => {
       fake.crearReservaConAsignacion({
         heatId: "heat-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
-        participantCount: 3, estado: "CONFIRMADA",
+        cantidadParticipantes: 3, estado: "CONFIRMADA",
       });
       fake.onQueryRaw = null; // una sola vez
     };
@@ -391,8 +428,8 @@ describe("confirmarReserva", () => {
       claveIdempotencia: "idem-estabilizacion",
     });
 
-    expect(resultado.ok).toBe(false);
-    if (resultado.ok) return;
+    expect(resultado.exito).toBe(false);
+    if (resultado.exito) return;
     expect(resultado.motivo).toBe("NO_DISPONIBLE");
     // La reserva confirmada del fixture (2) + la "competidora" inyectada por
     // el hook (3); la nuestra nunca se creo.
@@ -413,7 +450,7 @@ describe("confirmarReserva", () => {
     });
     fake.crearReservaConAsignacion({
       heatId: "heat-original", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
-      participantCount: 2, estado: "CONFIRMADA",
+      cantidadParticipantes: 2, estado: "CONFIRMADA",
     });
 
     // El heat reutilizado "cambia de identidad" cada vez que se intenta
@@ -439,8 +476,8 @@ describe("confirmarReserva", () => {
       claveIdempotencia: "idem-inestable",
     });
 
-    expect(resultado.ok).toBe(false);
-    if (resultado.ok) return;
+    expect(resultado.exito).toBe(false);
+    if (resultado.exito) return;
     expect(resultado.motivo).toBe("CONFLICTO_CONCURRENCIA");
     // Solo la reserva confirmada del fixture; la nuestra nunca se creo (el
     // rollback del fake descarta cualquier intento fallido).
@@ -457,7 +494,7 @@ describe("confirmarReserva", () => {
     fake.onReservationFindUnique = () => {
       fake.reservas.push({
         id: "res-competidora",
-        publicCode: "SRP-COMPETIDORA",
+        codigoPublico: "SRP-COMPETIDORA",
         servicioId: SERVICIO_ID,
         fecha: FECHA_DATE,
         cantidadPersonas: 5,
@@ -480,9 +517,9 @@ describe("confirmarReserva", () => {
       claveIdempotencia,
     });
 
-    expect(resultado.ok).toBe(true);
-    if (!resultado.ok) return;
-    expect(resultado.reservationId).toBe("res-competidora");
+    expect(resultado.exito).toBe(true);
+    if (!resultado.exito) return;
+    expect(resultado.idReserva).toBe("res-competidora");
     expect(fake.reservas).toHaveLength(1); // la nuestra nunca se creo
     expect(fake.heats).toHaveLength(0);
   });
@@ -498,8 +535,8 @@ describe("confirmarReserva", () => {
       claveIdempotencia: "idem-publiccode-retry",
     });
 
-    expect(resultado.ok).toBe(true);
-    if (!resultado.ok) return;
+    expect(resultado.exito).toBe(true);
+    if (!resultado.exito) return;
     // El intento fallido no debe dejar una reserva huerfana (rollback del fake).
     expect(fake.reservas).toHaveLength(1);
     expect(fake.heats).toHaveLength(1);

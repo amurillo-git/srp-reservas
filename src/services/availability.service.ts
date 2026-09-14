@@ -95,9 +95,9 @@ function aResultadoPublico(plan: PlanDisponibilidad): PlanDisponibilidadPublico 
 }
 
 export type ResultadoConfirmacion =
-  | { readonly ok: true; readonly reservationId: string; readonly publicCode: string; readonly plan: PlanDisponiblePublico }
-  | { readonly ok: false; readonly motivo: "NO_DISPONIBLE"; readonly plan: PlanNoDisponible }
-  | { readonly ok: false; readonly motivo: "CONFLICTO_CONCURRENCIA"; readonly detalle: string };
+  | { readonly exito: true; readonly idReserva: string; readonly codigoPublico: string; readonly plan: PlanDisponiblePublico }
+  | { readonly exito: false; readonly motivo: "NO_DISPONIBLE"; readonly plan: PlanNoDisponible }
+  | { readonly exito: false; readonly motivo: "CONFLICTO_CONCURRENCIA"; readonly detalle: string };
 
 /** Convierte una FechaISO ("YYYY-MM-DD") a Date UTC de medianoche, evitando
  * que un desfase de huso horario mueva el dia. */
@@ -205,13 +205,13 @@ async function construirContextoDisponibilidad(
       for (const asignacion of heat.asignaciones) {
         const r = asignacion.reservation;
         if (r.estado === "CONFIRMADA") {
-          personasConfirmadas += asignacion.participantCount;
+          personasConfirmadas += asignacion.cantidadParticipantes;
         } else if (
           r.estado === "PENDIENTE_VALIDACION_SINPE" ||
           (r.estado === "TEMPORAL" && r.expiraEn !== null && r.expiraEn > ahora)
         ) {
           // 6.5: retenidos = reservas temporales vigentes + SINPE pendiente de validar.
-          personasRetenidas += asignacion.participantCount;
+          personasRetenidas += asignacion.cantidadParticipantes;
         }
       }
       bloques.push({
@@ -321,6 +321,46 @@ export async function consultarDisponibilidad(
   solicitud: SolicitudConsultarDisponibilidad,
 ): Promise<PlanDisponibilidadPublico> {
   return aResultadoPublico(await construirPlanDesde(prisma, solicitud));
+}
+
+export interface CandidatoDelDia {
+  readonly horaInicioCandidata: HoraISO;
+  readonly plan: PlanDisponibilidadPublico;
+}
+
+/**
+ * Version "dropdown" de `consultarDisponibilidad` (8.7): evalua TODOS los
+ * intervalos de 15 minutos del dia para un mismo (servicioId, fecha,
+ * cantidadPersonas). A diferencia de llamar a `consultarDisponibilidad` una
+ * vez por candidato (lo que dispararia las 3 queries de
+ * `construirContextoDisponibilidad` y reconstruiria la rejilla de 96 bloques
+ * en cada uno de los ~96 candidatos), aqui el `ContextoDisponibilidad` se
+ * construye UNA SOLA VEZ y se reutiliza para cada llamada a `construirPlan`
+ * (que ya es pura y ya acepta un contexto prearmado). Sigue siendo
+ * puramente informativa: no persiste ni bloquea nada, igual que
+ * `consultarDisponibilidad`.
+ */
+export async function consultarDisponibilidadDelDia(
+  prisma: PrismaClient,
+  servicioId: IdServicio,
+  fecha: FechaISO,
+  cantidadPersonas: number,
+): Promise<readonly CandidatoDelDia[]> {
+  const contexto = await construirContextoDisponibilidad(prisma, servicioId, fecha);
+
+  const candidatos: CandidatoDelDia[] = [];
+  for (let minuto = 0; minuto < 24 * 60; minuto += 15) {
+    const horaInicioCandidata = minutosAHora(minuto);
+    const plan = construirPlan({
+      fecha,
+      horaInicioCandidata,
+      cantidadPersonas,
+      servicioId,
+      contexto,
+    });
+    candidatos.push({ horaInicioCandidata, plan: aResultadoPublico(plan) });
+  }
+  return candidatos;
 }
 
 /** Toma locks pesimistas sobre los Heat/OperationalBatch EXISTENTES indicados.
@@ -434,30 +474,53 @@ function generarCodigoPublico(): string {
     .toUpperCase()}`;
 }
 
-function normalizarToken(valor: string): string {
-  return valor.toLowerCase().replace(/[^a-z0-9]/g, "");
+/** Restriccion unica identificada por su nombre estable (declarado via `map`
+ * en schema.prisma) y por los campos Prisma (camelCase) que la componen. */
+interface RestriccionUnica {
+  readonly nombre: string;
+  readonly campos: readonly string[];
 }
+
+/** Ver `@@unique(..., map: "heats_service_id_fecha_hora_inicio_key")` en Heat. */
+const RESTRICCION_HEAT_UNICO: RestriccionUnica = {
+  nombre: "heats_service_id_fecha_hora_inicio_key",
+  campos: ["servicioId", "fecha", "horaInicio"],
+};
+/** Ver `claveIdempotencia @unique(map: "reservations_clave_idempotencia_key")` en Reservation. */
+const RESTRICCION_CLAVE_IDEMPOTENCIA: RestriccionUnica = {
+  nombre: "reservations_clave_idempotencia_key",
+  campos: ["claveIdempotencia"],
+};
+/** Ver `codigoPublico @unique(map: "reservations_public_code_key")` en Reservation. */
+const RESTRICCION_CODIGO_PUBLICO: RestriccionUnica = {
+  nombre: "reservations_public_code_key",
+  campos: ["codigoPublico"],
+};
 
 /**
  * true si `error` es una violacion de restriccion unica de Prisma (P2002)
- * cuyo `target` menciona alguno de los `alias` dados. Se aceptan varios
- * alias por campo (ej. el nombre de campo en camelCase junto con el nombre
- * fisico de columna en snake_case) porque `meta.target` puede llegar como
- * array de campos, como el nombre de la restriccion, o como string segun el
- * proveedor/version de Prisma; comparar contra un solo alias fijo (como
- * hacia la version anterior) puede no coincidir con lo que realmente se
- * reporta y dejar pasar el error como no manejado.
+ * para exactamente `restriccion`. `error.meta.target` puede llegar como el
+ * nombre de la restriccion (string) o como el array de campos que la
+ * componen, segun el proveedor/version de Prisma; en ambos casos se compara
+ * con igualdad EXACTA contra el nombre declarado explicitamente via `map` en
+ * schema.prisma (o contra el conjunto exacto de campos), nunca con
+ * coincidencia parcial/heuristica sobre alias adivinados.
  */
-function esViolacionUnica(error: unknown, ...alias: string[]): boolean {
+function esViolacionUnica(error: unknown, restriccion: RestriccionUnica): boolean {
   if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") {
     return false;
   }
   const target = error.meta?.target;
-  const partes: string[] =
-    typeof target === "string" ? [target] : Array.isArray(target) ? (target as string[]) : [];
-  if (partes.length === 0) return false;
-  const textoNormalizado = normalizarToken(partes.join("_"));
-  return alias.some((a) => textoNormalizado.includes(normalizarToken(a)));
+  if (typeof target === "string") {
+    return target === restriccion.nombre;
+  }
+  if (Array.isArray(target)) {
+    return (
+      target.length === restriccion.campos.length &&
+      restriccion.campos.every((campo) => (target as unknown[]).includes(campo))
+    );
+  }
+  return false;
 }
 
 const PLAN_VACIO_IDEMPOTENTE: PlanDisponiblePublico = {
@@ -494,9 +557,9 @@ export async function confirmarReserva(
   });
   if (existente) {
     return {
-      ok: true,
-      reservationId: existente.id,
-      publicCode: existente.publicCode,
+      exito: true,
+      idReserva: existente.id,
+      codigoPublico: existente.codigoPublico,
       plan: PLAN_VACIO_IDEMPOTENTE,
     };
   }
@@ -507,14 +570,14 @@ export async function confirmarReserva(
         async (tx) => {
           const resultado = await calcularYBloquearPlanFinal(tx, solicitud);
           if (!resultado.disponible) {
-            return { ok: false, motivo: "NO_DISPONIBLE", plan: resultado.plan };
+            return { exito: false, motivo: "NO_DISPONIBLE", plan: resultado.plan };
           }
           const planFinal = resultado.plan;
 
           // Persistencia atomica del plan final (8.8.5).
           const reservation = await tx.reservation.create({
             data: {
-              publicCode: generarCodigoPublico(),
+              codigoPublico: generarCodigoPublico(),
               servicioId: solicitud.servicioId,
               fecha: fechaISOaDate(solicitud.fecha),
               cantidadPersonas: solicitud.cantidadPersonas,
@@ -591,16 +654,16 @@ export async function confirmarReserva(
                 data: {
                   reservationId: reservation.id,
                   heatId,
-                  participantCount: heatPropuesto.personasAsignadas,
+                  cantidadParticipantes: heatPropuesto.personasAsignadas,
                 },
               });
             }
           }
 
           return {
-            ok: true,
-            reservationId: reservation.id,
-            publicCode: reservation.publicCode,
+            exito: true,
+            idReserva: reservation.id,
+            codigoPublico: reservation.codigoPublico,
             plan: ocultarLimpieza(planFinal),
           };
         },
@@ -609,14 +672,14 @@ export async function confirmarReserva(
     } catch (error) {
       // Doble clic / reintento de red bajo carrera: otra copia de la misma
       // solicitud ya creo la reserva con esta clave de idempotencia.
-      if (esViolacionUnica(error, "claveIdempotencia", "clave_idempotencia")) {
+      if (esViolacionUnica(error, RESTRICCION_CLAVE_IDEMPOTENCIA)) {
         const creadaPorOtroIntento = await prisma.reservation.findUniqueOrThrow({
           where: { claveIdempotencia: solicitud.claveIdempotencia },
         });
         return {
-          ok: true,
-          reservationId: creadaPorOtroIntento.id,
-          publicCode: creadaPorOtroIntento.publicCode,
+          exito: true,
+          idReserva: creadaPorOtroIntento.id,
+          codigoPublico: creadaPorOtroIntento.codigoPublico,
           plan: PLAN_VACIO_IDEMPOTENTE,
         };
       }
@@ -628,12 +691,12 @@ export async function confirmarReserva(
       // colision del codigo publico generado; (c) el bloqueo no logro
       // estabilizarse en un punto fijo tras varias rondas.
       const esConflictoDeCapacidad =
-        esViolacionUnica(error, "servicioId", "service_id") ||
-        esViolacionUnica(error, "publicCode", "public_code");
+        esViolacionUnica(error, RESTRICCION_HEAT_UNICO) ||
+        esViolacionUnica(error, RESTRICCION_CODIGO_PUBLICO);
       if (esConflictoDeCapacidad || error instanceof ConflictoBloqueoInestable) {
         if (intento < intentosMaximos) continue;
         return {
-          ok: false,
+          exito: false,
           motivo: "CONFLICTO_CONCURRENCIA",
           detalle: "La disponibilidad cambio mientras se procesaba la reserva.",
         };
@@ -643,7 +706,7 @@ export async function confirmarReserva(
   }
 
   return {
-    ok: false,
+    exito: false,
     motivo: "CONFLICTO_CONCURRENCIA",
     detalle: "No se pudo confirmar la reserva tras varios intentos por alta concurrencia.",
   };
