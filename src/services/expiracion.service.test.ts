@@ -179,6 +179,12 @@ describe("expirarReservasVencidas", () => {
       heatId: "heat-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
       cantidadParticipantes: 0, estado: "CONFIRMADA",
     });
+    // 6.9.5: pendiente de validacion SINPE, aunque su expiraEn (heredado de
+    // cuando era TEMPORAL) ya haya pasado, NO debe expirar por el timer.
+    const { reserva: pendienteSinpe } = fake.crearReservaConAsignacion({
+      heatId: "heat-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
+      cantidadParticipantes: 0, estado: "PENDIENTE_VALIDACION_SINPE", expiraEn: HACE_UN_RATO,
+    });
 
     const resultados = await expirarReservasVencidas(comoPrisma(fake), AHORA);
 
@@ -186,5 +192,6 @@ describe("expirarReservasVencidas", () => {
     expect(fake.reservas.find((r) => r.id === vencida.id)!.estado).toBe("EXPIRADA");
     expect(fake.reservas.find((r) => r.id === vigente.id)!.estado).toBe("TEMPORAL");
     expect(fake.reservas.find((r) => r.id === confirmada.id)!.estado).toBe("CONFIRMADA");
+    expect(fake.reservas.find((r) => r.id === pendienteSinpe.id)!.estado).toBe("PENDIENTE_VALIDACION_SINPE");
   });
 });

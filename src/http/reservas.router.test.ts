@@ -215,3 +215,70 @@ describe("GET /api/reservations/:publicCode", () => {
     expect("liberacionOperativa" in respuesta.body).toBe(false);
   });
 });
+
+describe("flujo SINPE (POST .../sinpe-evidence, admin confirm/reject-sinpe)", () => {
+  async function crearReservaTemporal(app: Express): Promise<string> {
+    const creacion = await request(app)
+      .post("/api/reservations")
+      .set("Idempotency-Key", `idem-sinpe-${Date.now()}-${Math.random()}`)
+      .send({
+        serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "09:00", partySize: 5,
+        customer: { name: "Ana", phone: "8888-0000" },
+      });
+    return creacion.body.codigoPublico as string;
+  }
+
+  it("reporta el comprobante, queda pendiente de validacion, y un admin lo aprueba (6.9.1-7)", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const codigoPublico = await crearReservaTemporal(app);
+
+    const reporte = await request(app)
+      .post(`/api/reservations/${codigoPublico}/sinpe-evidence`)
+      .send({ nombrePagador: "Ana Perez", referencia: "REF-1" });
+    expect(reporte.status).toBe(200);
+    expect(fake.reservas.find((r) => r.codigoPublico === codigoPublico)!.estado).toBe(
+      "PENDIENTE_VALIDACION_SINPE",
+    );
+
+    const aprobacion = await request(app).post(`/api/admin/reservations/${codigoPublico}/confirm-sinpe`);
+    expect(aprobacion.status).toBe(200);
+    expect(fake.reservas.find((r) => r.codigoPublico === codigoPublico)!.estado).toBe("CONFIRMADA");
+  });
+
+  it("un admin puede rechazar un comprobante pendiente, exigiendo un motivo (6.9.8)", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const codigoPublico = await crearReservaTemporal(app);
+    await request(app).post(`/api/reservations/${codigoPublico}/sinpe-evidence`).send({});
+
+    const sinMotivo = await request(app).post(`/api/admin/reservations/${codigoPublico}/reject-sinpe`).send({});
+    expect(sinMotivo.status).toBe(400);
+
+    const rechazo = await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/reject-sinpe`)
+      .send({ motivo: "Comprobante ilegible" });
+    expect(rechazo.status).toBe(200);
+    const reserva = fake.reservas.find((r) => r.codigoPublico === codigoPublico)!;
+    expect(reserva.estado).toBe("RECHAZADA");
+    expect(reserva.motivoRechazo).toBe("Comprobante ilegible");
+  });
+
+  it("devuelve 404 al reportar un comprobante para un codigo inexistente", async () => {
+    const app = crearApp(comoPrisma(new FakePrisma()));
+    const respuesta = await request(app).post("/api/reservations/SRP-NOEXISTE/sinpe-evidence").send({});
+    expect(respuesta.status).toBe(404);
+  });
+
+  it("devuelve 409 al aprobar SINPE de una reserva que no esta pendiente de validacion", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const codigoPublico = await crearReservaTemporal(app); // sigue TEMPORAL, nunca se reporto comprobante
+
+    const respuesta = await request(app).post(`/api/admin/reservations/${codigoPublico}/confirm-sinpe`);
+    expect(respuesta.status).toBe(409);
+  });
+});

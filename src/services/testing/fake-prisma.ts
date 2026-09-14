@@ -111,6 +111,9 @@ export interface FilaReserva {
   clienteNombre: string;
   clienteTelefono: string;
   clienteEmail?: string | null;
+  motivoRechazo?: string | null;
+  rechazadaEn?: Date | null;
+  confirmadaEn?: Date | null;
   expiraEn: Date | null;
 }
 
@@ -152,6 +155,16 @@ function mismaFecha(a: Date, b: Date): boolean {
   );
 }
 
+export interface FilaComprobanteSinpe {
+  id: Id;
+  reservationId: Id;
+  comprobanteUrl?: string | null;
+  nombrePagador?: string | null;
+  numeroOrigen?: string | null;
+  referencia?: string | null;
+  reportadoEn: Date;
+}
+
 export class FakePrisma {
   readonly servicios: FilaServicio[] = [];
   readonly plantillas: FilaPlantilla[] = [];
@@ -161,6 +174,7 @@ export class FakePrisma {
   readonly heats: FilaHeat[] = [];
   readonly asignaciones: FilaAsignacion[] = [];
   readonly reservas: FilaReserva[] = [];
+  readonly comprobantesSinpe: FilaComprobanteSinpe[] = [];
 
   private proximoConflictoUnico: { tabla: "heat" | "reservation"; target: string; vecesRestantes: number } | null =
     null;
@@ -532,6 +546,16 @@ export class FakePrisma {
     },
   };
 
+  readonly sinpeEvidence = {
+    findUnique: async ({ where }: { where: { reservationId: Id } }) =>
+      this.comprobantesSinpe.find((c) => c.reservationId === where.reservationId) ?? null,
+    create: async ({ data }: { data: Omit<FilaComprobanteSinpe, "id" | "reportadoEn"> & { reportadoEn?: Date } }) => {
+      const fila: FilaComprobanteSinpe = { id: nuevoId("sinpe"), reportadoEn: data.reportadoEn ?? new Date(), ...data };
+      this.comprobantesSinpe.push(fila);
+      return fila;
+    },
+  };
+
   /** Ejecuta el callback SIN aislamiento real (no hay otras transacciones
    * concurrentes en este doble de un solo hilo). Sí revierte, de forma
    * best-effort, los cambios de FILAS (creadas o eliminadas) durante un
@@ -559,6 +583,7 @@ export class FakePrisma {
       heats: [...this.heats],
       asignaciones: [...this.asignaciones],
       reservas: [...this.reservas],
+      comprobantesSinpe: [...this.comprobantesSinpe],
     };
     try {
       return await fn(this);
@@ -571,6 +596,7 @@ export class FakePrisma {
       this.heats.splice(0, this.heats.length, ...copia.heats);
       this.asignaciones.splice(0, this.asignaciones.length, ...copia.asignaciones);
       this.reservas.splice(0, this.reservas.length, ...copia.reservas);
+      this.comprobantesSinpe.splice(0, this.comprobantesSinpe.length, ...copia.comprobantesSinpe);
       throw error;
     }
   }

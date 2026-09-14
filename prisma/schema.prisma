@@ -67,6 +67,7 @@ enum EstadoReserva {
   TEMPORAL
   PENDIENTE_VALIDACION_SINPE
   CONFIRMADA
+  RECHAZADA
   CANCELADA
   EXPIRADA
 
@@ -246,12 +247,34 @@ model Reservation {
   actualizadoEn     DateTime      @updatedAt @map("actualizado_en")
   confirmadaEn      DateTime?     @map("confirmada_en")
   canceladaEn       DateTime?     @map("cancelada_en")
+  /// 6.9.8: motivo obligatorio al rechazar un deposito SINPE.
+  motivoRechazo     String?       @map("motivo_rechazo")
+  rechazadaEn       DateTime?     @map("rechazada_en")
 
-  servicio     Service          @relation(fields: [servicioId], references: [id])
-  asignaciones HeatAllocation[]
+  servicio      Service          @relation(fields: [servicioId], references: [id])
+  asignaciones  HeatAllocation[]
+  sinpeEvidence SinpeEvidence?
 
   @@index([servicioId, fecha])
   @@map("reservations")
+}
+
+/// Comprobante SINPE reportado por el cliente (16.1, 6.9, 11.3). Relacion 1:1
+/// con Reservation: el MVP no admite reportar mas de un comprobante por
+/// reserva (un rechazo requeriria una nueva reserva o una reprogramacion,
+/// fuera de alcance de esta slice).
+model SinpeEvidence {
+  id             String   @id @default(cuid())
+  reservationId  String   @unique @map("reservation_id")
+  comprobanteUrl String?  @map("comprobante_url")
+  nombrePagador  String?  @map("nombre_pagador")
+  numeroOrigen   String?  @map("numero_origen")
+  referencia     String?  @map("referencia")
+  reportadoEn    DateTime @default(now()) @map("reportado_en")
+
+  reservation Reservation @relation(fields: [reservationId], references: [id])
+
+  @@map("sinpe_evidences")
 }
 
 // ----------------------------------------------------------------------------

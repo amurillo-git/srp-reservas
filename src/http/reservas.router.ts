@@ -18,6 +18,7 @@ import {
   listarHorasDisponibles,
   listarServiciosActivos,
 } from "../services/availability.service.js";
+import { aprobarSinpe, rechazarSinpe, reportarComprobanteSinpe } from "../services/pagos.service.js";
 
 const PATRON_FECHA = /^\d{4}-\d{2}-\d{2}$/;
 const PATRON_ANIO_MES = /^\d{4}-\d{2}$/;
@@ -193,6 +194,66 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
         return enviarError(res, 404, "No existe ninguna reserva con ese codigo");
       }
       res.json(reserva);
+    }),
+  );
+
+  router.post(
+    "/reservations/:publicCode/sinpe-evidence",
+    conManejoDeErrores(async (req, res) => {
+      const { comprobanteUrl, nombrePagador, numeroOrigen, referencia } = req.body ?? {};
+      for (const [nombre, valor] of Object.entries({ comprobanteUrl, nombrePagador, numeroOrigen, referencia })) {
+        if (valor !== undefined && typeof valor !== "string") {
+          return enviarError(res, 400, `${nombre} debe ser texto`);
+        }
+      }
+
+      const resultado = await reportarComprobanteSinpe(prisma, req.params.publicCode!, {
+        comprobanteUrl,
+        nombrePagador,
+        numeroOrigen,
+        referencia,
+      });
+
+      if (resultado.ok) {
+        res.status(200).json({ ok: true });
+        return;
+      }
+      const status = resultado.motivo === "NO_ENCONTRADA" ? 404 : 409;
+      enviarError(res, status, resultado.motivo);
+    }),
+  );
+
+  // 18.3: rutas administrativas. NOTA: sin autenticacion/autorizacion todavia
+  // (no existe User/Role en el esquema, fuera de alcance de esta slice) —
+  // deben protegerse antes de exponerse en un entorno real.
+  router.post(
+    "/admin/reservations/:publicCode/confirm-sinpe",
+    conManejoDeErrores(async (req, res) => {
+      const resultado = await aprobarSinpe(prisma, req.params.publicCode!);
+      if (resultado.ok) {
+        res.status(200).json({ ok: true });
+        return;
+      }
+      const status = resultado.motivo === "NO_ENCONTRADA" ? 404 : 409;
+      enviarError(res, status, resultado.motivo);
+    }),
+  );
+
+  router.post(
+    "/admin/reservations/:publicCode/reject-sinpe",
+    conManejoDeErrores(async (req, res) => {
+      const { motivo } = req.body ?? {};
+      if (typeof motivo !== "string" || motivo.trim().length === 0) {
+        return enviarError(res, 400, "motivo es requerido");
+      }
+
+      const resultado = await rechazarSinpe(prisma, req.params.publicCode!, motivo);
+      if (resultado.ok) {
+        res.status(200).json({ ok: true });
+        return;
+      }
+      const status = resultado.motivo === "NO_ENCONTRADA" ? 404 : 409;
+      enviarError(res, status, resultado.motivo);
     }),
   );
 
