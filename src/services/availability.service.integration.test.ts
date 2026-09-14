@@ -19,13 +19,11 @@
 //   4. Ejecutar `npm test` normalmente (Vitest recoge las variables de
 //      entorno del proceso; no hace falta ningun flag adicional).
 //
-// ADVERTENCIA para quien las active por primera vez: estas pruebas NO se han
-// ejecutado todavia contra una base de datos real en esta sesion de trabajo
-// (el entorno de desarrollo no tenia Postgres disponible). La logica se
-// razono con cuidado contra el codigo de availability.service.ts, pero
-// deben tratarse como no verificadas hasta la primera corrida real; si algo
-// falla, es mas probable que sea un defecto de esta prueba (o del setup)
-// que del servicio.
+// Verificado contra el proyecto Supabase "SRP Reservas" (2026-09-14): CONC-001
+// pasa en ~10s de red real. El timeout de 30s en beforeAll/afterAll/it (en vez
+// de los 5s por defecto de Vitest) es deliberado: contra el pooler real, cada
+// intento de confirmarReserva hace varias consultas secuenciales por ronda de
+// estabilizacion, y eso no alcanza en 5s bajo latencia de red real.
 // ============================================================================
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -74,7 +72,7 @@ describe.skipIf(!process.env.DATABASE_URL)("availability.service (integracion, P
         activo: true,
       },
     });
-  });
+  }, 30_000);
 
   afterAll(async () => {
     await prisma.heatAllocation.deleteMany({ where: { reservation: { servicioId: SERVICIO_ID } } });
@@ -84,7 +82,7 @@ describe.skipIf(!process.env.DATABASE_URL)("availability.service (integracion, P
     await prisma.scheduleTemplate.deleteMany({ where: { servicioId: SERVICIO_ID } });
     await prisma.service.deleteMany({ where: { id: SERVICIO_ID } });
     await prisma.$disconnect();
-  });
+  }, 30_000);
 
   it("CONC-001: si dos clientes piden el ultimo espacio del mismo heat al mismo tiempo, solo una transaccion tiene exito", async () => {
     // Heat de 09:00-09:15 con 4/5 ocupados por una reserva ya confirmada:
@@ -160,5 +158,5 @@ describe.skipIf(!process.env.DATABASE_URL)("availability.service (integracion, P
     const totalParticipantes = asignacionesActivas.reduce((suma, a) => suma + a.cantidadParticipantes, 0);
     expect(totalParticipantes).toBeLessThanOrEqual(5);
     expect(totalParticipantes).toBe(5); // 4 existentes + exactamente 1 de los dos clientes concurrentes
-  });
+  }, 30_000);
 });
