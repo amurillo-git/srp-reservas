@@ -189,21 +189,25 @@ model Heat {
   lote         OperationalBatch @relation(fields: [loteId], references: [id], onDelete: Cascade)
   asignaciones HeatAllocation[]
 
-  // 16.6: "un heat unico por servicio, fecha y hora".
-  @@unique([servicioId, fecha, horaInicio])
+  // 16.6: "un heat unico por servicio, fecha y hora". Nombre de restriccion
+  // explicito (en vez de dejar que Prisma lo derive) para que
+  // `esViolacionUnica` en availability.service.ts pueda comparar el
+  // `meta.target` de un P2002 contra un nombre estable y exacto, sin adivinar
+  // el formato segun proveedor/version de Prisma.
+  @@unique([servicioId, fecha, horaInicio], map: "heats_service_id_fecha_hora_inicio_key")
   @@index([loteId])
   @@map("heats")
 }
 
 /// Personas de una reserva asignadas a un heat (16.5).
 model HeatAllocation {
-  id                String           @id @default(cuid())
-  reservationId     String           @map("reservation_id")
-  heatId            String           @map("heat_id")
-  participantCount  Int              @map("participant_count")
-  estado            EstadoAsignacion @default(ACTIVA)
-  creadoEn          DateTime         @default(now()) @map("creado_en")
-  liberadoEn        DateTime?        @map("liberado_en")
+  id                    String           @id @default(cuid())
+  reservationId         String           @map("reservation_id")
+  heatId                String           @map("heat_id")
+  cantidadParticipantes Int              @map("participant_count")
+  estado                EstadoAsignacion @default(ACTIVA)
+  creadoEn              DateTime         @default(now()) @map("creado_en")
+  liberadoEn            DateTime?        @map("liberado_en")
 
   reservation Reservation @relation(fields: [reservationId], references: [id])
   // onDelete Cascade: al vencer una reserva temporal, un heat que queda
@@ -221,7 +225,9 @@ model HeatAllocation {
 /// contacto minimos inline; el estado de pago se reduce a EstadoReserva.
 model Reservation {
   id                String        @id @default(cuid())
-  publicCode        String        @unique @map("public_code")
+  // Nombre de restriccion explicito (16.6/8.8.6): ver comentario analogo en
+  // Heat mas arriba.
+  codigoPublico     String        @unique(map: "reservations_public_code_key") @map("public_code")
   servicioId        String        @map("service_id")
   fecha             DateTime      @db.Date
   cantidadPersonas  Int           @map("cantidad_personas")
@@ -231,7 +237,7 @@ model Reservation {
   montoDeposito     Decimal       @map("monto_deposito") @db.Decimal(10, 2)
   montoSaldo        Decimal       @map("monto_saldo") @db.Decimal(10, 2)
   /// Clave de idempotencia (8.8.7): evita doble clic / reintento de red.
-  claveIdempotencia String        @unique @map("clave_idempotencia")
+  claveIdempotencia String        @unique(map: "reservations_clave_idempotencia_key") @map("clave_idempotencia")
   clienteNombre     String        @map("cliente_nombre")
   clienteTelefono   String        @map("cliente_telefono")
   clienteEmail      String?       @map("cliente_email")

@@ -112,7 +112,7 @@ describe.skipIf(!process.env.DATABASE_URL)("availability.service (integracion, P
     });
     const reservaExistente = await prisma.reservation.create({
       data: {
-        publicCode: `SRP-FIX-${Date.now()}`,
+        codigoPublico: `SRP-FIX-${Date.now()}`,
         servicioId: SERVICIO_ID,
         fecha: FECHA_DATE,
         cantidadPersonas: 4,
@@ -127,7 +127,7 @@ describe.skipIf(!process.env.DATABASE_URL)("availability.service (integracion, P
       },
     });
     await prisma.heatAllocation.create({
-      data: { reservationId: reservaExistente.id, heatId: heat.id, participantCount: 4 },
+      data: { reservationId: reservaExistente.id, heatId: heat.id, cantidadParticipantes: 4 },
     });
 
     // Confirmacion previa: la consulta (fuera de transaccion) ve exactamente
@@ -147,8 +147,8 @@ describe.skipIf(!process.env.DATABASE_URL)("availability.service (integracion, P
       confirmarReserva(prisma, { ...solicitudBase, claveIdempotencia: `idem-conc-b-${Date.now()}` }),
     ]);
 
-    const exitos = [resultadoA, resultadoB].filter((r) => r.ok);
-    const fallos = [resultadoA, resultadoB].filter((r) => !r.ok);
+    const exitos = [resultadoA, resultadoB].filter((r) => r.exito);
+    const fallos = [resultadoA, resultadoB].filter((r) => !r.exito);
     expect(exitos).toHaveLength(1);
     expect(fallos).toHaveLength(1);
 
@@ -157,7 +157,7 @@ describe.skipIf(!process.env.DATABASE_URL)("availability.service (integracion, P
     const asignacionesActivas = await prisma.heatAllocation.findMany({
       where: { heatId: heat.id, estado: "ACTIVA" },
     });
-    const totalParticipantes = asignacionesActivas.reduce((suma, a) => suma + a.participantCount, 0);
+    const totalParticipantes = asignacionesActivas.reduce((suma, a) => suma + a.cantidadParticipantes, 0);
     expect(totalParticipantes).toBeLessThanOrEqual(5);
     expect(totalParticipantes).toBe(5); // 4 existentes + exactamente 1 de los dos clientes concurrentes
   });

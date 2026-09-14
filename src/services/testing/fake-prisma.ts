@@ -88,14 +88,14 @@ export interface FilaAsignacion {
   id: Id;
   reservationId: Id;
   heatId: Id;
-  participantCount: number;
+  cantidadParticipantes: number;
   estado: EstadoAsignacion;
   liberadoEn?: Date | null;
 }
 
 export interface FilaReserva {
   id: Id;
-  publicCode: string;
+  codigoPublico: string;
   servicioId: Id;
   fecha: Date;
   cantidadPersonas: number;
@@ -111,14 +111,42 @@ export interface FilaReserva {
   expiraEn: Date | null;
 }
 
+/** Forma de los argumentos que `heat.findMany` realmente recibe: de
+ * availability.service.ts (`servicioId`+`fecha`, ver
+ * `construirContextoDisponibilidad`) y de expiracion.service.ts (`loteId`,
+ * ver `normalizarUnLote`). Todo es opcional salvo `where` porque un
+ * `include`/`orderBy` ausente es un `findMany` valido (sin relaciones ni
+ * orden explicito) tanto en Prisma real como aqui. */
+interface ArgsHeatFindMany {
+  where: { servicioId?: Id; fecha?: Date; loteId?: Id };
+  orderBy?: { horaInicio?: "asc" | "desc"; posicionEnLote?: "asc" | "desc" };
+  include?: {
+    lote?: boolean;
+    asignaciones?: {
+      where?: { estado?: EstadoAsignacion };
+      include?: { reservation?: { select?: Partial<Record<keyof FilaReserva, boolean>> } };
+    };
+  };
+}
+
 let contadorId = 0;
 function nuevoId(prefijo: string): string {
   contadorId += 1;
   return `${prefijo}-${contadorId}`;
 }
 
+/** Compara solo año/mes/día (UTC), igual que la semántica real de la columna
+ * Postgres `@db.Date`: esta NO guarda hora, asi que dos `Date` con distinta
+ * hora pero el mismo dia calendario deben considerarse la misma fecha. Se usa
+ * UTC porque `fechaISOaDate` en availability.service.ts construye siempre
+ * medianoche UTC (mismo criterio que `Date#getUTCDay()` en el resto del
+ * servicio). */
 function mismaFecha(a: Date, b: Date): boolean {
-  return a.getTime() === b.getTime();
+  return (
+    a.getUTCFullYear() === b.getUTCFullYear() &&
+    a.getUTCMonth() === b.getUTCMonth() &&
+    a.getUTCDate() === b.getUTCDate()
+  );
 }
 
 export class FakePrisma {
@@ -205,7 +233,7 @@ export class FakePrisma {
    * contara como confirmada o retenida. */
   crearReservaConAsignacion(opciones: {
     heatId: Id;
-    participantCount: number;
+    cantidadParticipantes: number;
     estado: "CONFIRMADA" | "TEMPORAL" | "PENDIENTE_VALIDACION_SINPE";
     expiraEn?: Date | null;
     servicioId: Id;
@@ -213,10 +241,10 @@ export class FakePrisma {
   }): { reserva: FilaReserva; asignacion: FilaAsignacion } {
     const reserva: FilaReserva = {
       id: nuevoId("res"),
-      publicCode: nuevoId("SRP"),
+      codigoPublico: nuevoId("SRP"),
       servicioId: opciones.servicioId,
       fecha: opciones.fecha,
-      cantidadPersonas: opciones.participantCount,
+      cantidadPersonas: opciones.cantidadParticipantes,
       estado: opciones.estado,
       moneda: "CRC",
       montoTotal: 0,
@@ -232,7 +260,7 @@ export class FakePrisma {
       id: nuevoId("alloc"),
       reservationId: reserva.id,
       heatId: opciones.heatId,
-      participantCount: opciones.participantCount,
+      cantidadParticipantes: opciones.cantidadParticipantes,
       estado: "ACTIVA",
     };
     this.asignaciones.push(asignacion);
@@ -300,34 +328,56 @@ export class FakePrisma {
   readonly heat = {
     /** Filtra por cualquier combinacion de `servicioId`+`fecha` (uso de
      * availability.service.ts, disponibilidad del dia) o `loteId` (uso de
-     * expiracion.service.ts, heats de un lote concreto al normalizarlo). */
-    findMany: async ({
-      where,
-    }: {
-      where: { servicioId?: Id; fecha?: Date; loteId?: Id };
-    }) => {
-      let resultado = this.heats.slice();
-      if (where.servicioId !== undefined) {
-        resultado = resultado.filter((h) => h.servicioId === where.servicioId);
+     * expiracion.service.ts, heats de un lote concreto al normalizarlo).
+     * A diferencia de una version anterior de este fake (que ignoraba
+     * `include`/`orderBy` y siempre re-derivaba por su cuenta el filtro
+     * `estado === "ACTIVA"` y la forma de `reservation`), este metodo LEE los
+     * argumentos reales que le pasan: si algun dia el llamador deja de pedir
+     * `asignaciones.where.estado` o cambia el `select` de `reservation`, este
+     * fake deja de fingir un comportamiento que ya no es el real, en vez de
+     * seguir devolviendo datos con la forma vieja. */
+    findMany: async (args: ArgsHeatFindMany) => {
+      const { where, orderBy, include } = args;
+      let filas = this.heats.filter(
+        (h) =>
+          (where.servicioId === undefined || h.servicioId === where.servicioId) &&
+          (where.fecha === undefined || mismaFecha(h.fecha, where.fecha)) &&
+          (where.loteId === undefined || h.loteId === where.loteId),
+      );
+
+      if (orderBy?.posicionEnLote !== undefined) {
+        const signo = orderBy.posicionEnLote === "desc" ? -1 : 1;
+        filas = [...filas].sort((a, b) => signo * (a.posicionEnLote - b.posicionEnLote));
+      } else {
+        const signo = orderBy?.horaInicio === "desc" ? -1 : 1;
+        filas = [...filas].sort((a, b) => signo * a.horaInicio.localeCompare(b.horaInicio));
       }
-      if (where.fecha !== undefined) {
-        resultado = resultado.filter((h) => mismaFecha(h.fecha, where.fecha!));
-      }
-      if (where.loteId !== undefined) {
-        resultado = resultado.filter((h) => h.loteId === where.loteId);
-      }
-      return resultado
-        .sort((a, b) => a.horaInicio.localeCompare(b.horaInicio))
-        .map((h) => ({
-          ...h,
-          lote: this.lotes.find((l) => l.id === h.loteId)!,
-          asignaciones: this.asignaciones
-            .filter((a) => a.heatId === h.id && a.estado === "ACTIVA")
+
+      return filas.map((h) => {
+        const fila: FilaHeat & { lote?: FilaLote; asignaciones?: unknown[] } = { ...h };
+
+        if (include?.lote) {
+          fila.lote = this.lotes.find((l) => l.id === h.loteId)!;
+        }
+
+        if (include?.asignaciones) {
+          const filtroEstado = include.asignaciones.where?.estado;
+          const seleccionReserva = include.asignaciones.include?.reservation?.select;
+          fila.asignaciones = this.asignaciones
+            .filter((a) => a.heatId === h.id && (filtroEstado === undefined || a.estado === filtroEstado))
             .map((a) => {
+              if (!seleccionReserva) return { ...a };
               const r = this.reservas.find((res) => res.id === a.reservationId)!;
-              return { ...a, reservation: { estado: r.estado, expiraEn: r.expiraEn } };
-            }),
-        }));
+              const reservation: Partial<FilaReserva> = {};
+              for (const campo of Object.keys(seleccionReserva) as (keyof FilaReserva)[]) {
+                if (seleccionReserva[campo]) reservation[campo] = r[campo] as never;
+              }
+              return { ...a, reservation };
+            });
+        }
+
+        return fila;
+      });
     },
     findUnique: async ({ where }: { where: { id: Id } }) =>
       this.heats.find((h) => h.id === where.id) ?? null,

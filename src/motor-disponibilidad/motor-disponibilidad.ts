@@ -400,10 +400,23 @@ function distribuirEquilibradamente(personas: number, heats: number): VectorDist
   return vector;
 }
 
+/** Cache de `permutacionesUnicas` por vector de entrada: el dropdown publico
+ * (8.7) evalua ~96 candidatos por dia para el mismo (servicioId, fecha,
+ * cantidadPersonas), y todos ellos derivan el MISMO vector de distribucion
+ * (7.2) desde `construirPlan` — recalcular sus permutaciones en cada uno es
+ * trabajo repetido y determinista. Clave = vector serializado; el resultado
+ * de `permutacionesUnicas` es puro (solo depende de `valores`), asi que
+ * cachear por su contenido es seguro. */
+const cachePermutaciones = new Map<string, number[][]>();
+
 /** Todas las permutaciones UNICAS de `valores` (evita duplicados con
  * elementos repetidos, ej. [5,5,5]). El orden original se prueba primero
  * (8.5 paso 4: se permutan solo "cuando sea necesario"). */
 function permutacionesUnicas(valores: readonly number[]): number[][] {
+  const claveCache = valores.join(",");
+  const cacheada = cachePermutaciones.get(claveCache);
+  if (cacheada) return cacheada;
+
   const conteos = new Map<number, number>();
   for (const v of valores) conteos.set(v, (conteos.get(v) ?? 0) + 1);
   const claves = [...conteos.keys()].sort((a, b) => b - a);
@@ -436,6 +449,7 @@ function permutacionesUnicas(valores: readonly number[]): number[][] {
     const identidad = resultado.splice(indiceIdentidad, 1)[0]!;
     resultado.unshift(identidad);
   }
+  cachePermutaciones.set(claveCache, resultado);
   return resultado;
 }
 

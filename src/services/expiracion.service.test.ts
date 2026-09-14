@@ -35,11 +35,11 @@ describe("expirarUnaReserva", () => {
     });
     fake.crearReservaConAsignacion({
       heatId: "heat-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
-      participantCount: 2, estado: "CONFIRMADA",
+      cantidadParticipantes: 2, estado: "CONFIRMADA",
     });
     const { reserva: reservaVencida, asignacion } = fake.crearReservaConAsignacion({
       heatId: "heat-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
-      participantCount: 3, estado: "TEMPORAL", expiraEn: HACE_UN_RATO,
+      cantidadParticipantes: 3, estado: "TEMPORAL", expiraEn: HACE_UN_RATO,
     });
 
     const resultado = await expirarUnaReserva(comoPrisma(fake), reservaVencida.id, AHORA);
@@ -70,14 +70,14 @@ describe("expirarUnaReserva", () => {
       horaInicio: "14:45", horaFin: "15:00", posicionEnLote: 2,
     });
     fake.reservas.push({
-      id: "res-7p", publicCode: "SRP-7P", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
+      id: "res-7p", codigoPublico: "SRP-7P", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
       cantidadPersonas: 7, estado: "TEMPORAL", moneda: "CRC", montoTotal: 0, montoDeposito: 0, montoSaldo: 0,
       claveIdempotencia: "idem-7p", clienteNombre: "Grupo", clienteTelefono: "00000000",
       expiraEn: HACE_UN_RATO,
     });
     fake.asignaciones.push(
-      { id: "alloc-7p-1", reservationId: "res-7p", heatId: "heat-1", participantCount: 4, estado: "ACTIVA" },
-      { id: "alloc-7p-2", reservationId: "res-7p", heatId: "heat-2", participantCount: 3, estado: "ACTIVA" },
+      { id: "alloc-7p-1", reservationId: "res-7p", heatId: "heat-1", cantidadParticipantes: 4, estado: "ACTIVA" },
+      { id: "alloc-7p-2", reservationId: "res-7p", heatId: "heat-2", cantidadParticipantes: 3, estado: "ACTIVA" },
     );
 
     const resultado = await expirarUnaReserva(comoPrisma(fake), "res-7p", AHORA);
@@ -99,12 +99,12 @@ describe("expirarUnaReserva", () => {
     fake.crearHeat({ id: "heat-1", loteId: lote.id, servicioId: SERVICIO_ID, fecha: FECHA_DATE, horaInicio: "10:00", horaFin: "10:15", posicionEnLote: 1 });
     fake.crearHeat({ id: "heat-2", loteId: lote.id, servicioId: SERVICIO_ID, fecha: FECHA_DATE, horaInicio: "10:15", horaFin: "10:30", posicionEnLote: 2 });
     fake.crearHeat({ id: "heat-3", loteId: lote.id, servicioId: SERVICIO_ID, fecha: FECHA_DATE, horaInicio: "10:30", horaFin: "10:45", posicionEnLote: 3 });
-    fake.crearReservaConAsignacion({ heatId: "heat-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE, participantCount: 5, estado: "CONFIRMADA" });
+    fake.crearReservaConAsignacion({ heatId: "heat-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE, cantidadParticipantes: 5, estado: "CONFIRMADA" });
     const { reserva: reservaVencida } = fake.crearReservaConAsignacion({
       heatId: "heat-2", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
-      participantCount: 5, estado: "TEMPORAL", expiraEn: HACE_UN_RATO,
+      cantidadParticipantes: 5, estado: "TEMPORAL", expiraEn: HACE_UN_RATO,
     });
-    fake.crearReservaConAsignacion({ heatId: "heat-3", servicioId: SERVICIO_ID, fecha: FECHA_DATE, participantCount: 5, estado: "CONFIRMADA" });
+    fake.crearReservaConAsignacion({ heatId: "heat-3", servicioId: SERVICIO_ID, fecha: FECHA_DATE, cantidadParticipantes: 5, estado: "CONFIRMADA" });
 
     await expirarUnaReserva(comoPrisma(fake), reservaVencida.id, AHORA);
 
@@ -124,9 +124,9 @@ describe("expirarUnaReserva", () => {
     fake.crearHeat({ id: "heat-2", loteId: lote.id, servicioId: SERVICIO_ID, fecha: FECHA_DATE, horaInicio: "10:15", horaFin: "10:30", posicionEnLote: 2 });
     const { reserva: reservaVencida } = fake.crearReservaConAsignacion({
       heatId: "heat-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
-      participantCount: 5, estado: "TEMPORAL", expiraEn: HACE_UN_RATO,
+      cantidadParticipantes: 5, estado: "TEMPORAL", expiraEn: HACE_UN_RATO,
     });
-    fake.crearReservaConAsignacion({ heatId: "heat-2", servicioId: SERVICIO_ID, fecha: FECHA_DATE, participantCount: 5, estado: "CONFIRMADA" });
+    fake.crearReservaConAsignacion({ heatId: "heat-2", servicioId: SERVICIO_ID, fecha: FECHA_DATE, cantidadParticipantes: 5, estado: "CONFIRMADA" });
 
     await expirarUnaReserva(comoPrisma(fake), reservaVencida.id, AHORA);
 
@@ -147,7 +147,7 @@ describe("expirarUnaReserva", () => {
     const fake = new FakePrisma();
     const { reserva } = fake.crearReservaConAsignacion({
       heatId: "heat-inexistente", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
-      participantCount: 2, estado: "CONFIRMADA", // ya no es TEMPORAL
+      cantidadParticipantes: 2, estado: "CONFIRMADA", // ya no es TEMPORAL
     });
 
     const resultado = await expirarUnaReserva(comoPrisma(fake), reserva.id, AHORA);
@@ -169,15 +169,15 @@ describe("expirarReservasVencidas", () => {
 
     const { reserva: vencida } = fake.crearReservaConAsignacion({
       heatId: "heat-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
-      participantCount: 5, estado: "TEMPORAL", expiraEn: HACE_UN_RATO,
+      cantidadParticipantes: 5, estado: "TEMPORAL", expiraEn: HACE_UN_RATO,
     });
     const { reserva: vigente } = fake.crearReservaConAsignacion({
       heatId: "heat-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
-      participantCount: 0, estado: "TEMPORAL", expiraEn: EN_UN_RATO,
+      cantidadParticipantes: 0, estado: "TEMPORAL", expiraEn: EN_UN_RATO,
     });
     const { reserva: confirmada } = fake.crearReservaConAsignacion({
       heatId: "heat-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
-      participantCount: 0, estado: "CONFIRMADA",
+      cantidadParticipantes: 0, estado: "CONFIRMADA",
     });
 
     const resultados = await expirarReservasVencidas(comoPrisma(fake), AHORA);
