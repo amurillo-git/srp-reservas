@@ -76,14 +76,17 @@ enum EstadoReserva {
 
 /// Catalogo de servicios (16.1). Inicialmente solo "karts".
 model Service {
-  id                  String   @id @default(cuid())
-  nombre              String
-  slug                String   @unique
-  moneda              String   @db.VarChar(3)
-  precioPorPersona    Decimal  @map("precio_por_persona") @db.Decimal(10, 2)
-  porcentajeDeposito  Int      @default(50) @map("porcentaje_deposito") // 6.7.4
-  activo              Boolean  @default(true)
-  creadoEn            DateTime @default(now()) @map("creado_en")
+  id                          String   @id @default(cuid())
+  nombre                      String
+  slug                        String   @unique
+  moneda                      String   @db.VarChar(3)
+  /// Tarifa para grupos de 1 a 4 personas.
+  precioPorPersonaGrupoPequeno Decimal @map("precio_por_persona_grupo_pequeno") @db.Decimal(10, 2)
+  /// Tarifa para grupos de 5 personas o mas (mas economica).
+  precioPorPersonaGrupoGrande  Decimal @map("precio_por_persona_grupo_grande") @db.Decimal(10, 2)
+  porcentajeDeposito          Int      @default(50) @map("porcentaje_deposito") // 6.7.4
+  activo                      Boolean  @default(true)
+  creadoEn                    DateTime @default(now()) @map("creado_en")
 
   plantillas   ScheduleTemplate[]
   excepciones  ScheduleException[]

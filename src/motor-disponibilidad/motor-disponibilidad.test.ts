@@ -589,6 +589,54 @@ describe("Motor de disponibilidad — casos DISP", () => {
   });
 });
 
+describe("precio: tarifa escalonada por tamano de grupo", () => {
+  const TARIFA = {
+    servicioId: SERVICIO_PRUEBA,
+    moneda: "CRC",
+    precioPorPersonaGrupoPequeno: 100,
+    precioPorPersonaGrupoGrande: 80,
+    porcentajeDeposito: 50,
+  };
+
+  function precioPara(cantidadPersonas: number) {
+    const resultado = construirPlan({
+      fecha: FECHA_PRUEBA,
+      horaInicioCandidata: "09:00",
+      cantidadPersonas,
+      servicioId: SERVICIO_PRUEBA,
+      contexto: { ...crearContextoDiaVacio(), tarifa: TARIFA },
+    });
+    expect(resultado.disponible).toBe(true);
+    if (!resultado.disponible) throw new Error("no disponible");
+    return resultado.precio;
+  }
+
+  it("1-4 personas paga la tarifa individual", () => {
+    expect(precioPara(4)).toEqual({ moneda: "CRC", montoTotal: 400, montoDeposito: 200, montoSaldo: 200 });
+  });
+
+  it("exactamente 5 personas ya paga la tarifa grupal (umbral inclusivo)", () => {
+    expect(precioPara(5)).toEqual({ moneda: "CRC", montoTotal: 400, montoDeposito: 200, montoSaldo: 200 });
+  });
+
+  it("mas de 5 personas sigue pagando la tarifa grupal", () => {
+    expect(precioPara(8)).toEqual({ moneda: "CRC", montoTotal: 640, montoDeposito: 320, montoSaldo: 320 });
+  });
+
+  it("sin tarifa configurada, el plan no incluye precio", () => {
+    const resultado = construirPlan({
+      fecha: FECHA_PRUEBA,
+      horaInicioCandidata: "09:00",
+      cantidadPersonas: 3,
+      servicioId: SERVICIO_PRUEBA,
+      contexto: crearContextoDiaVacio(),
+    });
+    expect(resultado.disponible).toBe(true);
+    if (!resultado.disponible) return;
+    expect(resultado.precio).toBeUndefined();
+  });
+});
+
 describe("normalizarLoteTrasLiberacion", () => {
   function heat(
     heatId: string,

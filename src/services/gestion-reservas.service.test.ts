@@ -23,7 +23,10 @@ const DIA_SEMANA_DOMINGO = 0; // FECHA_DATE.getUTCDay() === 0
 const AHORA = new Date("2026-09-13T08:00:00.000Z");
 
 function crearFixtureBase(fake: FakePrisma): void {
-  fake.crearServicio({ id: SERVICIO_ID, moneda: "CRC", precioPorPersona: 4000, porcentajeDeposito: 50 });
+  fake.crearServicio({
+    id: SERVICIO_ID, moneda: "CRC",
+    precioPorPersonaGrupoPequeno: 4000, precioPorPersonaGrupoGrande: 4000, porcentajeDeposito: 50,
+  });
   fake.crearPlantilla({
     id: "tpl-1", servicioId: SERVICIO_ID, diaSemana: DIA_SEMANA_DOMINGO,
     horaApertura: "09:00", horaCierre: "16:00", almuerzoInicio: "12:00", almuerzoFin: "12:30", activo: true,

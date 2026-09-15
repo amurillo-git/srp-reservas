@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express, { type NextFunction, type Request, type Response } from "express";
+import cors from "cors";
 import { PrismaClient } from "@prisma/client";
 import { crearRouterReservas } from "./http/reservas.router.js";
 import { asegurarAdminInicial } from "./services/auth.service.js";
@@ -9,6 +10,10 @@ import { iniciarWorkerExpiracion } from "./worker/expiracion-worker.js";
 const app = express();
 const prisma = new PrismaClient();
 
+// Origen de la app de reservas (Next.js, carpeta web/), separada de esta API
+// (18.3): sin esto, el navegador bloquea las llamadas fetch desde otro
+// origen. En produccion, WEB_APP_URL debe apuntar al dominio real.
+app.use(cors({ origin: process.env.WEB_APP_URL ?? "http://localhost:3001" }));
 app.use(express.json());
 
 // Ruta de verificacion de vida del servicio (health check), util para el

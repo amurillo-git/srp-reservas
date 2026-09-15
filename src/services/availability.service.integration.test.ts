@@ -57,7 +57,8 @@ describe.skipIf(!process.env.DATABASE_URL)("availability.service (integracion, P
         nombre: "Karts (prueba de integracion)",
         slug: `karts-test-${Date.now()}`,
         moneda: "CRC",
-        precioPorPersona: 4000,
+        precioPorPersonaGrupoPequeno: 4000,
+        precioPorPersonaGrupoGrande: 4000,
         porcentajeDeposito: 50,
       },
     });

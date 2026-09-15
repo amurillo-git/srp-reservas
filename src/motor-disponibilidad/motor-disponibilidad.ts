@@ -134,12 +134,19 @@ export type BloqueDeCalendario =
  */
 export type RejillaDelDia = readonly BloqueDeCalendario[];
 
-/** Tarifa opcional del servicio; puede no existir aun (8.1). */
+/** Grupos de 5 personas o mas pagan la tarifa grupal (mas economica). */
+export const UMBRAL_GRUPO_GRANDE = 5;
+
+/** Tarifa opcional del servicio; puede no existir aun (8.1). Precio
+ * escalonado por tamano de grupo: 1-4 personas pagan
+ * `precioPorPersonaGrupoPequeno`, `UMBRAL_GRUPO_GRANDE` o mas pagan
+ * `precioPorPersonaGrupoGrande` (tarifa de grupo, mas economica). */
 export interface TarifaServicio {
   readonly servicioId: IdServicio;
   /** Moneda ISO 4217, ej. "CRC", "USD". */
   readonly moneda: string;
-  readonly precioPorPersona: number;
+  readonly precioPorPersonaGrupoPequeno: number;
+  readonly precioPorPersonaGrupoGrande: number;
   /** Porcentaje de deposito, 0-100 (MVP = 50, ver 6.7.4). */
   readonly porcentajeDeposito: number;
 }
@@ -702,7 +709,9 @@ function redondearMoneda(valor: number): number {
 }
 
 function calcularPrecio(tarifa: TarifaServicio, personas: number): PrecioPropuesto {
-  const montoTotal = redondearMoneda(tarifa.precioPorPersona * personas);
+  const precioPorPersona =
+    personas >= UMBRAL_GRUPO_GRANDE ? tarifa.precioPorPersonaGrupoGrande : tarifa.precioPorPersonaGrupoPequeno;
+  const montoTotal = redondearMoneda(precioPorPersona * personas);
   const montoDeposito = redondearMoneda((montoTotal * tarifa.porcentajeDeposito) / 100);
   const montoSaldo = redondearMoneda(montoTotal - montoDeposito);
   return { moneda: tarifa.moneda, montoTotal, montoDeposito, montoSaldo };

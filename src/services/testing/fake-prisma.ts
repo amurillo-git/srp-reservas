@@ -38,7 +38,8 @@ export interface FilaServicio {
   nombre: string;
   slug: string;
   moneda: string;
-  precioPorPersona: number;
+  precioPorPersonaGrupoPequeno: number;
+  precioPorPersonaGrupoGrande: number;
   porcentajeDeposito: number;
   activo: boolean;
 }
@@ -196,7 +197,8 @@ export class FakePrisma {
       nombre: "Karts",
       slug: `karts-${datos.id}`,
       moneda: "CRC",
-      precioPorPersona: 4000,
+      precioPorPersonaGrupoPequeno: 4000,
+      precioPorPersonaGrupoGrande: 4000,
       porcentajeDeposito: 50,
       activo: true,
       ...datos,

@@ -25,7 +25,10 @@ const DIA_SEMANA_DOMINGO = 0; // FECHA_DATE.getUTCDay() === 0
  * 12:00-12:30), sin excepciones ni bloqueos: equivalente al "dia vacio" del
  * motor puro, pero reconstruido desde Prisma. */
 function crearFixtureBase(fake: FakePrisma): void {
-  fake.crearServicio({ id: SERVICIO_ID, moneda: "CRC", precioPorPersona: 4000, porcentajeDeposito: 50 });
+  fake.crearServicio({
+    id: SERVICIO_ID, moneda: "CRC",
+    precioPorPersonaGrupoPequeno: 4000, precioPorPersonaGrupoGrande: 4000, porcentajeDeposito: 50,
+  });
   fake.crearPlantilla({
     id: "tpl-1",
     servicioId: SERVICIO_ID,
@@ -169,7 +172,7 @@ describe("consultarDisponibilidad", () => {
 
   it("incluye el precio cuando el servicio tiene tarifa configurada (13.1)", async () => {
     const fake = new FakePrisma();
-    crearFixtureBase(fake); // precioPorPersona: 4000, porcentajeDeposito: 50
+    crearFixtureBase(fake); // precio 4000/persona (ambos tramos), porcentajeDeposito: 50
 
     const resultado = await consultarDisponibilidad(comoPrisma(fake), {
       servicioId: SERVICIO_ID, fecha: FECHA_ISO, horaInicioCandidata: "09:00", cantidadPersonas: 5,

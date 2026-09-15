@@ -294,7 +294,8 @@ async function construirContextoDisponibilidad(
       ? {
           servicioId,
           moneda: servicio.moneda,
-          precioPorPersona: Number(servicio.precioPorPersona),
+          precioPorPersonaGrupoPequeno: Number(servicio.precioPorPersonaGrupoPequeno),
+          precioPorPersonaGrupoGrande: Number(servicio.precioPorPersonaGrupoGrande),
           porcentajeDeposito: servicio.porcentajeDeposito,
         }
       : undefined,
@@ -392,7 +393,8 @@ export interface ServicioPublico {
   readonly nombre: string;
   readonly slug: string;
   readonly moneda: string;
-  readonly precioPorPersona: number;
+  readonly precioPorPersonaGrupoPequeno: number;
+  readonly precioPorPersonaGrupoGrande: number;
   readonly porcentajeDeposito: number;
 }
 
@@ -406,7 +408,8 @@ export async function listarServiciosActivos(prisma: PrismaClient): Promise<read
     nombre: s.nombre,
     slug: s.slug,
     moneda: s.moneda,
-    precioPorPersona: Number(s.precioPorPersona),
+    precioPorPersonaGrupoPequeno: Number(s.precioPorPersonaGrupoPequeno),
+    precioPorPersonaGrupoGrande: Number(s.precioPorPersonaGrupoGrande),
     porcentajeDeposito: s.porcentajeDeposito,
   }));
 }
