@@ -3,6 +3,8 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { PrismaClient } from "@prisma/client";
 import { crearRouterReservas } from "./http/reservas.router.js";
 import { asegurarAdminInicial } from "./services/auth.service.js";
+import { expirarReservasVencidas } from "./services/expiracion.service.js";
+import { iniciarWorkerExpiracion } from "./worker/expiracion-worker.js";
 
 const app = express();
 const prisma = new PrismaClient();
@@ -30,9 +32,13 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 // mismos via supertest, con FakePrisma en vez de este PrismaClient real.
 if (process.env.NODE_ENV !== "test") {
   const port = Number(process.env.PORT ?? 3000);
+  const intervaloExpiracionMs = Number(process.env.EXPIRACION_INTERVALO_MS ?? 60_000);
   asegurarAdminInicial(prisma)
     .catch((error: unknown) => console.error("No se pudo asegurar el admin inicial:", error))
     .finally(() => {
+      // 19.1: libera heats de reservas TEMPORAL vencidas mientras el
+      // servidor esta vivo (ver src/worker/expiracion-worker.ts).
+      iniciarWorkerExpiracion(() => expirarReservasVencidas(prisma), intervaloExpiracionMs);
       app.listen(port, () => {
         console.log(`API de Sarapiquí Race Park escuchando en el puerto ${port}`);
       });
