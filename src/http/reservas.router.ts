@@ -21,9 +21,12 @@ import {
 import { aprobarSinpe, rechazarSinpe, reportarComprobanteSinpe } from "../services/pagos.service.js";
 import { iniciarSesion } from "../services/auth.service.js";
 import { requireAuth } from "./auth.middleware.js";
+import { crearBloqueo, eliminarBloqueo, listarBloqueos } from "../services/bloqueos.service.js";
 
 /** 14.7: solo Administrador y Caja validan depositos SINPE. */
 const ROLES_VALIDAN_SINPE = ["ADMINISTRADOR", "CAJA"] as const;
+/** 14.7: solo Administrador gestiona bloqueos. */
+const ROLES_GESTIONAN_BLOQUEOS = ["ADMINISTRADOR"] as const;
 
 const PATRON_FECHA = /^\d{4}-\d{2}-\d{2}$/;
 const PATRON_ANIO_MES = /^\d{4}-\d{2}$/;
@@ -275,6 +278,78 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
       }
       const status = resultado.motivo === "NO_ENCONTRADA" ? 404 : 409;
       enviarError(res, status, resultado.motivo);
+    }),
+  );
+
+  // 14.4, 18.3: bloqueos administrativos. Solo ADMINISTRADOR (14.7).
+  router.post(
+    "/admin/blocks",
+    requireAuth(ROLES_GESTIONAN_BLOQUEOS),
+    conManejoDeErrores(async (req, res) => {
+      const { serviceId, date, startTime, endTime, reason, force } = req.body ?? {};
+
+      if (typeof serviceId !== "string" || serviceId.length === 0) {
+        return enviarError(res, 400, "serviceId es requerido");
+      }
+      if (typeof date !== "string" || !PATRON_FECHA.test(date)) {
+        return enviarError(res, 400, "date debe tener el formato YYYY-MM-DD");
+      }
+      if (typeof startTime !== "string" || !PATRON_HORA.test(startTime)) {
+        return enviarError(res, 400, "startTime debe tener el formato HH:mm");
+      }
+      if (typeof endTime !== "string" || !PATRON_HORA.test(endTime)) {
+        return enviarError(res, 400, "endTime debe tener el formato HH:mm");
+      }
+      if (reason !== undefined && typeof reason !== "string") {
+        return enviarError(res, 400, "reason debe ser texto");
+      }
+      if (force !== undefined && typeof force !== "boolean") {
+        return enviarError(res, 400, "force debe ser booleano");
+      }
+
+      const resultado = await crearBloqueo(prisma, {
+        servicioId: serviceId, fecha: date, horaInicio: startTime, horaFin: endTime,
+        motivo: reason, forzar: force,
+      });
+
+      if (resultado.ok) {
+        res.status(201).json({ blockId: resultado.bloqueoId });
+        return;
+      }
+      // 9.22: no se crea nada; se devuelven las reservas en conflicto para
+      // que el administrador decida (reintentar con force:true, u otra hora).
+      res.status(409).json({ motivo: resultado.motivo, reservasEnConflicto: resultado.reservasEnConflicto });
+    }),
+  );
+
+  router.get(
+    "/admin/blocks",
+    requireAuth(ROLES_GESTIONAN_BLOQUEOS),
+    conManejoDeErrores(async (req, res) => {
+      const serviceId = req.query.serviceId;
+      const date = req.query.date;
+      if (typeof serviceId !== "string" || serviceId.length === 0) {
+        return enviarError(res, 400, "serviceId es requerido");
+      }
+      if (typeof date !== "string" || !PATRON_FECHA.test(date)) {
+        return enviarError(res, 400, "date debe tener el formato YYYY-MM-DD");
+      }
+
+      const bloqueos = await listarBloqueos(prisma, serviceId, date);
+      res.json({ bloqueos });
+    }),
+  );
+
+  router.delete(
+    "/admin/blocks/:id",
+    requireAuth(ROLES_GESTIONAN_BLOQUEOS),
+    conManejoDeErrores(async (req, res) => {
+      const resultado = await eliminarBloqueo(prisma, req.params.id!);
+      if (resultado.ok) {
+        res.status(200).json({ ok: true });
+        return;
+      }
+      enviarError(res, 404, resultado.motivo);
     }),
   );
 

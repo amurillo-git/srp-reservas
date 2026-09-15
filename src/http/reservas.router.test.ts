@@ -362,3 +362,93 @@ describe("POST /api/admin/login", () => {
     expect(respuesta.status).toBe(401);
   });
 });
+
+describe("/api/admin/blocks", () => {
+  async function crearReservaTemporal(app: Express): Promise<string> {
+    const creacion = await request(app)
+      .post("/api/reservations")
+      .set("Idempotency-Key", `idem-block-${Date.now()}-${Math.random()}`)
+      .send({
+        serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "09:00", partySize: 5,
+        customer: { name: "Ana", phone: "8888-0000" },
+      });
+    return creacion.body.codigoPublico as string;
+  }
+
+  it("crea un bloqueo sin conflicto (201)", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const respuesta = await request(app)
+      .post("/api/admin/blocks")
+      .set("Authorization", auth)
+      .send({ serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "10:00", endTime: "11:00", reason: "Mantenimiento" });
+
+    expect(respuesta.status).toBe(201);
+    expect(respuesta.body.blockId).toBeTruthy();
+    expect(fake.bloqueos).toHaveLength(1);
+  });
+
+  it("9.22: devuelve 409 con las reservas en conflicto y no crea nada sin force", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+    const codigoPublico = await crearReservaTemporal(app); // heat en 09:00-09:15, TEMPORAL
+
+    const respuesta = await request(app)
+      .post("/api/admin/blocks")
+      .set("Authorization", auth)
+      .send({ serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "09:00", endTime: "09:30" });
+
+    expect(respuesta.status).toBe(409);
+    expect(respuesta.body.reservasEnConflicto).toEqual([
+      expect.objectContaining({ codigoPublico }),
+    ]);
+    expect(fake.bloqueos).toHaveLength(0);
+  });
+
+  it("crea el bloqueo pese al conflicto si force:true", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+    await crearReservaTemporal(app);
+
+    const respuesta = await request(app)
+      .post("/api/admin/blocks")
+      .set("Authorization", auth)
+      .send({ serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "09:00", endTime: "09:30", force: true });
+
+    expect(respuesta.status).toBe(201);
+    expect(fake.bloqueos).toHaveLength(1);
+  });
+
+  it("lista y elimina bloqueos; exige autenticacion", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const sinToken = await request(app).get(`/api/admin/blocks?serviceId=${SERVICIO_ID}&date=${FECHA_ISO}`);
+    expect(sinToken.status).toBe(401);
+
+    const creacion = await request(app)
+      .post("/api/admin/blocks")
+      .set("Authorization", auth)
+      .send({ serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "10:00", endTime: "11:00" });
+    const blockId = creacion.body.blockId as string;
+
+    const listado = await request(app)
+      .get(`/api/admin/blocks?serviceId=${SERVICIO_ID}&date=${FECHA_ISO}`)
+      .set("Authorization", auth);
+    expect(listado.body.bloqueos).toHaveLength(1);
+
+    const eliminacion = await request(app).delete(`/api/admin/blocks/${blockId}`).set("Authorization", auth);
+    expect(eliminacion.status).toBe(200);
+    expect(fake.bloqueos).toHaveLength(0);
+
+    const eliminacionOtraVez = await request(app).delete(`/api/admin/blocks/${blockId}`).set("Authorization", auth);
+    expect(eliminacionOtraVez.status).toBe(404);
+  });
+});

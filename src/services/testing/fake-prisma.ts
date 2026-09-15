@@ -347,6 +347,17 @@ export class FakePrisma {
       this.bloqueos.filter(
         (b) => b.servicioId === where.servicioId && mismaFecha(b.fecha, where.fecha),
       ),
+    create: async ({ data }: { data: Omit<FilaBloqueo, "id"> }) => {
+      const fila: FilaBloqueo = { id: nuevoId("block"), ...data };
+      this.bloqueos.push(fila);
+      return fila;
+    },
+    delete: async ({ where }: { where: { id: Id } }) => {
+      const indice = this.bloqueos.findIndex((b) => b.id === where.id);
+      if (indice === -1) throw new Error(`Bloqueo ${where.id} no existe (fake)`);
+      const [fila] = this.bloqueos.splice(indice, 1);
+      return fila!;
+    },
   };
 
   readonly service = {
