@@ -22,11 +22,14 @@ import { aprobarSinpe, rechazarSinpe, reportarComprobanteSinpe } from "../servic
 import { iniciarSesion } from "../services/auth.service.js";
 import { requireAuth } from "./auth.middleware.js";
 import { crearBloqueo, eliminarBloqueo, listarBloqueos } from "../services/bloqueos.service.js";
+import { cancelarReserva, reprogramarReserva } from "../services/gestion-reservas.service.js";
 
 /** 14.7: solo Administrador y Caja validan depositos SINPE. */
 const ROLES_VALIDAN_SINPE = ["ADMINISTRADOR", "CAJA"] as const;
 /** 14.7: solo Administrador gestiona bloqueos. */
 const ROLES_GESTIONAN_BLOQUEOS = ["ADMINISTRADOR"] as const;
+/** 14.7: Administrador y Atencion "crean y modifican reservas". */
+const ROLES_GESTIONAN_RESERVAS = ["ADMINISTRADOR", "ATENCION"] as const;
 
 const PATRON_FECHA = /^\d{4}-\d{2}-\d{2}$/;
 const PATRON_ANIO_MES = /^\d{4}-\d{2}$/;
@@ -274,6 +277,50 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
       const resultado = await rechazarSinpe(prisma, req.params.publicCode!, motivo);
       if (resultado.ok) {
         res.status(200).json({ ok: true });
+        return;
+      }
+      const status = resultado.motivo === "NO_ENCONTRADA" ? 404 : 409;
+      enviarError(res, status, resultado.motivo);
+    }),
+  );
+
+  // 14.5-14.6: cancelacion y reprogramacion de reservas desde el panel.
+  router.post(
+    "/admin/reservations/:publicCode/cancel",
+    requireAuth(ROLES_GESTIONAN_RESERVAS),
+    conManejoDeErrores(async (req, res) => {
+      const resultado = await cancelarReserva(prisma, req.params.publicCode!);
+      if (resultado.ok) {
+        res.status(200).json({ ok: true });
+        return;
+      }
+      const status = resultado.motivo === "NO_ENCONTRADA" ? 404 : 409;
+      enviarError(res, status, resultado.motivo);
+    }),
+  );
+
+  router.post(
+    "/admin/reservations/:publicCode/reschedule",
+    requireAuth(ROLES_GESTIONAN_RESERVAS),
+    conManejoDeErrores(async (req, res) => {
+      const { date, startTime, partySize } = req.body ?? {};
+
+      if (typeof date !== "string" || !PATRON_FECHA.test(date)) {
+        return enviarError(res, 400, "date debe tener el formato YYYY-MM-DD");
+      }
+      if (typeof startTime !== "string" || !PATRON_HORA.test(startTime)) {
+        return enviarError(res, 400, "startTime debe tener el formato HH:mm");
+      }
+      if (typeof partySize !== "number" || !Number.isInteger(partySize) || partySize <= 0) {
+        return enviarError(res, 400, "partySize debe ser un entero positivo");
+      }
+
+      const resultado = await reprogramarReserva(prisma, req.params.publicCode!, {
+        fecha: date, horaInicioCandidata: startTime, cantidadPersonas: partySize,
+      });
+
+      if (resultado.ok) {
+        res.status(200).json({ plan: resultado.plan });
         return;
       }
       const status = resultado.motivo === "NO_ENCONTRADA" ? 404 : 409;

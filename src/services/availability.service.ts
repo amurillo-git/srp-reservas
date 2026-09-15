@@ -83,7 +83,7 @@ function ocultarLimpiezaDelLote(lote: LotePropuesto): LotePropuestoPublico {
 
 /** Quita `liberacionOperativa` y el `horaFinLimpieza` de cada lote antes de
  * devolver un plan disponible a quien llamo al servicio. */
-function ocultarLimpieza(plan: PlanDisponible): PlanDisponiblePublico {
+export function ocultarLimpieza(plan: PlanDisponible): PlanDisponiblePublico {
   const { liberacionOperativa: _liberacionOperativa, lotes, ...resto } = plan;
   return { ...resto, lotes: lotes.map(ocultarLimpiezaDelLote) };
 }
@@ -101,7 +101,7 @@ export type ResultadoConfirmacion =
 
 /** Convierte una FechaISO ("YYYY-MM-DD") a Date UTC de medianoche, evitando
  * que un desfase de huso horario mueva el dia. */
-function fechaISOaDate(fecha: FechaISO): Date {
+export function fechaISOaDate(fecha: FechaISO): Date {
   return new Date(`${fecha}T00:00:00.000Z`);
 }
 
@@ -170,6 +170,11 @@ async function construirContextoDisponibilidad(
   cliente: ClientePrisma,
   servicioId: IdServicio,
   fecha: FechaISO,
+  /** 14.6: al recalcular el plan de una reserva que se esta reprogramando,
+   * sus propias asignaciones ACTIVA no deben contar como ocupacion — de lo
+   * contrario reprogramar hacia el mismo horario (o uno solapado) se
+   * autobloquearia contando dos veces la misma gente. */
+  reservationIdAIgnorar?: string,
 ): Promise<ContextoDisponibilidad> {
   const fechaDate = fechaISOaDate(fecha);
   const ahora = new Date();
@@ -203,6 +208,7 @@ async function construirContextoDisponibilidad(
       let personasConfirmadas = 0;
       let personasRetenidas = 0;
       for (const asignacion of heat.asignaciones) {
+        if (asignacion.reservationId === reservationIdAIgnorar) continue;
         const r = asignacion.reservation;
         if (r.estado === "CONFIRMADA") {
           personasConfirmadas += asignacion.cantidadParticipantes;
@@ -298,8 +304,14 @@ async function construirContextoDisponibilidad(
 async function construirPlanDesde(
   cliente: ClientePrisma,
   solicitud: SolicitudConsultarDisponibilidad,
+  reservationIdAIgnorar?: string,
 ): Promise<PlanDisponibilidad> {
-  const contexto = await construirContextoDisponibilidad(cliente, solicitud.servicioId, solicitud.fecha);
+  const contexto = await construirContextoDisponibilidad(
+    cliente,
+    solicitud.servicioId,
+    solicitud.fecha,
+    reservationIdAIgnorar,
+  );
   return construirPlan({
     fecha: solicitud.fecha,
     horaInicioCandidata: solicitud.horaInicioCandidata,
@@ -551,7 +563,7 @@ function idsExistentesDelPlan(plan: PlanDisponible): { heatIds: string[]; loteId
 /** Se lanza cuando `calcularYBloquearPlanFinal` no logra estabilizar el plan
  * bajo lock tras `MAX_RONDAS_ESTABILIZACION` intentos; `confirmarReserva` la
  * trata igual que un choque de unicidad (retry acotado / conflicto). */
-class ConflictoBloqueoInestable extends Error {
+export class ConflictoBloqueoInestable extends Error {
   constructor() {
     super("El plan recalculado no se estabilizo bajo lock tras varias rondas");
     this.name = "ConflictoBloqueoInestable";
@@ -560,7 +572,7 @@ class ConflictoBloqueoInestable extends Error {
 
 const MAX_RONDAS_ESTABILIZACION = 3;
 
-type ResultadoCalculoPlan =
+export type ResultadoCalculoPlan =
   | { readonly disponible: true; readonly plan: PlanDisponible }
   | { readonly disponible: false; readonly plan: PlanNoDisponible };
 
@@ -575,14 +587,15 @@ type ResultadoCalculoPlan =
  * un heat que ahora resulta mas conveniente), la siguiente ronda lo detecta,
  * lo bloquea tambien y vuelve a validar.
  */
-async function calcularYBloquearPlanFinal(
+export async function calcularYBloquearPlanFinal(
   tx: Prisma.TransactionClient,
-  solicitud: SolicitudConfirmarReserva,
+  solicitud: SolicitudConsultarDisponibilidad,
+  reservationIdAIgnorar?: string,
 ): Promise<ResultadoCalculoPlan> {
   const heatIdsBloqueados = new Set<string>();
   const loteIdsBloqueados = new Set<string>();
 
-  let planCandidato = await construirPlanDesde(tx, solicitud);
+  let planCandidato = await construirPlanDesde(tx, solicitud, reservationIdAIgnorar);
 
   for (let ronda = 0; ronda < MAX_RONDAS_ESTABILIZACION; ronda++) {
     if (!planCandidato.disponible) {
@@ -606,7 +619,7 @@ async function calcularYBloquearPlanFinal(
 
     // Recalcular bajo el lock recien tomado: el contexto puede haber
     // cambiado desde la ronda anterior (8.8.4).
-    planCandidato = await construirPlanDesde(tx, solicitud);
+    planCandidato = await construirPlanDesde(tx, solicitud, reservationIdAIgnorar);
   }
 
   throw new ConflictoBloqueoInestable();
@@ -622,13 +635,13 @@ function generarCodigoPublico(): string {
 
 /** Restriccion unica identificada por su nombre estable (declarado via `map`
  * en schema.prisma) y por los campos Prisma (camelCase) que la componen. */
-interface RestriccionUnica {
+export interface RestriccionUnica {
   readonly nombre: string;
   readonly campos: readonly string[];
 }
 
 /** Ver `@@unique(..., map: "heats_service_id_fecha_hora_inicio_key")` en Heat. */
-const RESTRICCION_HEAT_UNICO: RestriccionUnica = {
+export const RESTRICCION_HEAT_UNICO: RestriccionUnica = {
   nombre: "heats_service_id_fecha_hora_inicio_key",
   campos: ["servicioId", "fecha", "horaInicio"],
 };
@@ -652,7 +665,7 @@ const RESTRICCION_CODIGO_PUBLICO: RestriccionUnica = {
  * schema.prisma (o contra el conjunto exacto de campos), nunca con
  * coincidencia parcial/heuristica sobre alias adivinados.
  */
-function esViolacionUnica(error: unknown, restriccion: RestriccionUnica): boolean {
+export function esViolacionUnica(error: unknown, restriccion: RestriccionUnica): boolean {
   if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") {
     return false;
   }
@@ -667,6 +680,89 @@ function esViolacionUnica(error: unknown, restriccion: RestriccionUnica): boolea
     );
   }
   return false;
+}
+
+/**
+ * Persiste un `PlanDisponible` ya validado y bloqueado (ver
+ * `calcularYBloquearPlanFinal`) para una reserva EXISTENTE: crea/reutiliza
+ * los OperationalBatch/Heat del plan y crea las HeatAllocation ACTIVA que le
+ * dan a `reservationId` su capacidad en cada heat. Reutilizada tanto por
+ * `confirmarReserva` (reserva recien creada) como por `reprogramarReserva`
+ * en gestion-reservas.service.ts (reserva existente que cambia de plan,
+ * 14.6): la logica de "como se materializa un plan en filas" es identica en
+ * ambos casos, solo cambia el origen del `reservationId`.
+ */
+export async function persistirPlanParaReserva(
+  tx: Prisma.TransactionClient,
+  servicioId: IdServicio,
+  fecha: FechaISO,
+  reservationId: string,
+  planFinal: PlanDisponible,
+): Promise<void> {
+  for (const lote of planFinal.lotes) {
+    let loteId = lote.loteId;
+    if (loteId === null) {
+      const nuevoLote = await tx.operationalBatch.create({
+        data: {
+          servicioId,
+          fecha: fechaISOaDate(fecha),
+          horaInicio: lote.horaInicio,
+          horaFinUltimoHeat: lote.horaFinActividadCliente,
+          horaInicioLimpieza: lote.horaFinActividadCliente,
+          horaFinLimpieza: lote.horaFinLimpieza,
+          cantidadHeats: lote.heats.length,
+        },
+      });
+      loteId = nuevoLote.id;
+    } else if (lote.esLoteReutilizado) {
+      // Ampliacion de un lote existente: se desplaza su limpieza (8.3, DISP-015).
+      await tx.operationalBatch.update({
+        where: { id: loteId },
+        data: {
+          horaFinUltimoHeat: lote.horaFinActividadCliente,
+          horaInicioLimpieza: lote.horaFinActividadCliente,
+          horaFinLimpieza: lote.horaFinLimpieza,
+          cantidadHeats: lote.heats.length,
+        },
+      });
+    }
+
+    for (let i = 0; i < lote.heats.length; i++) {
+      const heatPropuesto = lote.heats[i]!;
+      let heatId = heatPropuesto.heatId;
+      if (heatId === null) {
+        const nuevoHeat = await tx.heat.create({
+          data: {
+            loteId,
+            servicioId,
+            fecha: fechaISOaDate(fecha),
+            horaInicio: heatPropuesto.horaInicio,
+            horaFin: heatPropuesto.horaFin,
+            posicionEnLote: i + 1,
+          },
+        });
+        heatId = nuevoHeat.id;
+      } else {
+        // Heat reutilizado: `i` es su posicion FINAL dentro de este lote (ya
+        // reordenado por el motor), que puede diferir de la que tenia antes
+        // de esta reserva si un heat nuevo quedo colocado cronologicamente
+        // antes de el (6.1.12, ejemplo 9.9). Sin este update, dos heats del
+        // mismo lote podrian terminar compartiendo el mismo posicionEnLote.
+        await tx.heat.update({
+          where: { id: heatId },
+          data: { posicionEnLote: i + 1 },
+        });
+      }
+
+      await tx.heatAllocation.create({
+        data: {
+          reservationId,
+          heatId,
+          cantidadParticipantes: heatPropuesto.personasAsignadas,
+        },
+      });
+    }
+  }
 }
 
 const PLAN_VACIO_IDEMPOTENTE: PlanDisponiblePublico = {
@@ -740,71 +836,7 @@ export async function confirmarReserva(
             },
           });
 
-          for (const lote of planFinal.lotes) {
-            let loteId = lote.loteId;
-            if (loteId === null) {
-              const nuevoLote = await tx.operationalBatch.create({
-                data: {
-                  servicioId: solicitud.servicioId,
-                  fecha: fechaISOaDate(solicitud.fecha),
-                  horaInicio: lote.horaInicio,
-                  horaFinUltimoHeat: lote.horaFinActividadCliente,
-                  horaInicioLimpieza: lote.horaFinActividadCliente,
-                  horaFinLimpieza: lote.horaFinLimpieza,
-                  cantidadHeats: lote.heats.length,
-                },
-              });
-              loteId = nuevoLote.id;
-            } else if (lote.esLoteReutilizado) {
-              // Ampliacion de un lote existente: se desplaza su limpieza (8.3, DISP-015).
-              await tx.operationalBatch.update({
-                where: { id: loteId },
-                data: {
-                  horaFinUltimoHeat: lote.horaFinActividadCliente,
-                  horaInicioLimpieza: lote.horaFinActividadCliente,
-                  horaFinLimpieza: lote.horaFinLimpieza,
-                  cantidadHeats: lote.heats.length,
-                },
-              });
-            }
-
-            for (let i = 0; i < lote.heats.length; i++) {
-              const heatPropuesto = lote.heats[i]!;
-              let heatId = heatPropuesto.heatId;
-              if (heatId === null) {
-                const nuevoHeat = await tx.heat.create({
-                  data: {
-                    loteId,
-                    servicioId: solicitud.servicioId,
-                    fecha: fechaISOaDate(solicitud.fecha),
-                    horaInicio: heatPropuesto.horaInicio,
-                    horaFin: heatPropuesto.horaFin,
-                    posicionEnLote: i + 1,
-                  },
-                });
-                heatId = nuevoHeat.id;
-              } else {
-                // Heat reutilizado: `i` es su posicion FINAL dentro de este
-                // lote (ya reordenado por el motor), que puede diferir de la
-                // que tenia antes de esta reserva si un heat nuevo quedo
-                // colocado cronologicamente antes de el (6.1.12, ejemplo 9.9).
-                // Sin este update, dos heats del mismo lote podrian terminar
-                // compartiendo el mismo posicionEnLote.
-                await tx.heat.update({
-                  where: { id: heatId },
-                  data: { posicionEnLote: i + 1 },
-                });
-              }
-
-              await tx.heatAllocation.create({
-                data: {
-                  reservationId: reservation.id,
-                  heatId,
-                  cantidadParticipantes: heatPropuesto.personasAsignadas,
-                },
-              });
-            }
-          }
+          await persistirPlanParaReserva(tx, solicitud.servicioId, solicitud.fecha, reservation.id, planFinal);
 
           return {
             exito: true,

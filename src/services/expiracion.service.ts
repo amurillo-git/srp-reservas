@@ -87,30 +87,45 @@ export async function expirarUnaReserva(
       data: { estado: "EXPIRADA" },
     });
 
-    const asignacionesActivas = await tx.heatAllocation.findMany({
-      where: { reservationId, estado: "ACTIVA" },
-    });
-    if (asignacionesActivas.length === 0) {
-      return { reservationId, expirada: true };
-    }
-
-    await tx.heatAllocation.updateMany({
-      where: { reservationId, estado: "ACTIVA" },
-      data: { estado: "LIBERADA", liberadoEn: ahora },
-    });
-
-    const loteIdsAfectados = new Set<IdLote>();
-    for (const asignacion of asignacionesActivas) {
-      const heat = await tx.heat.findUnique({ where: { id: asignacion.heatId } });
-      if (heat) loteIdsAfectados.add(heat.loteId);
-    }
-
-    for (const loteId of loteIdsAfectados) {
-      await normalizarUnLote(tx, loteId);
-    }
+    await liberarAsignacionesYNormalizarLotes(tx, reservationId, ahora);
 
     return { reservationId, expirada: true };
   });
+}
+
+/**
+ * Libera (marca LIBERADA) todas las asignaciones ACTIVA de una reserva y
+ * normaliza los lotes que quedaron afectados (6.7.6-8). Reutilizada tanto al
+ * vencer una reserva (arriba) como al cancelarla o reprogramarla
+ * (gestion-reservas.service.ts, 14.5/14.6): en los tres casos la reserva deja
+ * de ocupar esos heats y el lote debe recalcularse de la misma forma. NO
+ * cambia el estado de la propia reserva — eso lo decide cada llamador antes
+ * o despues, segun su propio flujo.
+ */
+export async function liberarAsignacionesYNormalizarLotes(
+  tx: Prisma.TransactionClient,
+  reservationId: string,
+  ahora: Date,
+): Promise<void> {
+  const asignacionesActivas = await tx.heatAllocation.findMany({
+    where: { reservationId, estado: "ACTIVA" },
+  });
+  if (asignacionesActivas.length === 0) return;
+
+  await tx.heatAllocation.updateMany({
+    where: { reservationId, estado: "ACTIVA" },
+    data: { estado: "LIBERADA", liberadoEn: ahora },
+  });
+
+  const loteIdsAfectados = new Set<IdLote>();
+  for (const asignacion of asignacionesActivas) {
+    const heat = await tx.heat.findUnique({ where: { id: asignacion.heatId } });
+    if (heat) loteIdsAfectados.add(heat.loteId);
+  }
+
+  for (const loteId of loteIdsAfectados) {
+    await normalizarUnLote(tx, loteId);
+  }
 }
 
 /** Recalcula el estado de un lote a partir de sus asignaciones ACTIVA
@@ -123,8 +138,14 @@ export async function expirarUnaReserva(
  * este mismo heat, insertar una asignacion nueva y comitear en la ventana
  * entre nuestra lectura (que lo vio vacio) y nuestro `heat.delete` /
  * `operationalBatch.delete` — borrando por cascada esa asignacion recien
- * creada sin que nadie lo note. */
-async function normalizarUnLote(tx: Prisma.TransactionClient, loteId: IdLote): Promise<void> {
+ * creada sin que nadie lo note.
+ *
+ * Exportada: `gestion-reservas.service.ts` (14.6) la reutiliza al
+ * reprogramar, donde solo se liberan las asignaciones ANTERIORES de la
+ * reserva (no las recien creadas por el nuevo plan), asi que no puede usar
+ * `liberarAsignacionesYNormalizarLotes` (que libera TODO lo ACTIVA de la
+ * reserva) y necesita este paso mas fino directamente. */
+export async function normalizarUnLote(tx: Prisma.TransactionClient, loteId: IdLote): Promise<void> {
   await tx.$queryRaw`SELECT id FROM "operational_batches" WHERE id = ${loteId} FOR UPDATE`;
   await tx.$queryRaw`SELECT id FROM "heats" WHERE lote_id = ${loteId} FOR UPDATE`;
 

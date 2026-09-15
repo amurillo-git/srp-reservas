@@ -122,6 +122,7 @@ export interface FilaReserva {
   motivoRechazo?: string | null;
   rechazadaEn?: Date | null;
   confirmadaEn?: Date | null;
+  canceladaEn?: Date | null;
   expiraEn: Date | null;
 }
 
@@ -505,6 +506,15 @@ export class FakePrisma {
     create: async ({ data }: { data: Omit<FilaAsignacion, "id" | "estado"> }) => {
       const fila: FilaAsignacion = { id: nuevoId("alloc"), estado: "ACTIVA", ...data };
       this.asignaciones.push(fila);
+      return fila;
+    },
+    /** Actualizacion puntual por id (uso de gestion-reservas.service.ts al
+     * reprogramar, 14.6: libera EXACTAMENTE las asignaciones anteriores, no
+     * todas las ACTIVA de la reserva — esas ya incluyen las nuevas). */
+    update: async ({ where, data }: { where: { id: Id }; data: Partial<FilaAsignacion> }) => {
+      const fila = this.asignaciones.find((a) => a.id === where.id);
+      if (!fila) throw new Error(`HeatAllocation ${where.id} no existe (fake)`);
+      Object.assign(fila, data);
       return fila;
     },
   };

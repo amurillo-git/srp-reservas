@@ -452,3 +452,108 @@ describe("/api/admin/blocks", () => {
     expect(eliminacionOtraVez.status).toBe(404);
   });
 });
+
+describe("/api/admin/reservations/:publicCode/cancel y /reschedule (14.5-14.6)", () => {
+  async function crearReservaConfirmada(app: Express, auth: string): Promise<string> {
+    const creacion = await request(app)
+      .post("/api/reservations")
+      .set("Idempotency-Key", `idem-gestion-${Date.now()}-${Math.random()}`)
+      .send({
+        serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "09:00", partySize: 5,
+        customer: { name: "Ana", phone: "8888-0000" },
+      });
+    const codigoPublico = creacion.body.codigoPublico as string;
+    await request(app).post(`/api/reservations/${codigoPublico}/sinpe-evidence`).send({});
+    await request(app).post(`/api/admin/reservations/${codigoPublico}/confirm-sinpe`).set("Authorization", auth);
+    return codigoPublico;
+  }
+
+  it("cancela una reserva CONFIRMADA (200)", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+    const codigoPublico = await crearReservaConfirmada(app, auth);
+
+    const respuesta = await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/cancel`)
+      .set("Authorization", auth);
+
+    expect(respuesta.status).toBe(200);
+    expect(fake.reservas.find((r) => r.codigoPublico === codigoPublico)!.estado).toBe("CANCELADA");
+  });
+
+  it("devuelve 404 al cancelar un codigo inexistente y 409 al cancelar dos veces", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const noExiste = await request(app)
+      .post("/api/admin/reservations/SRP-NOEXISTE/cancel")
+      .set("Authorization", auth);
+    expect(noExiste.status).toBe(404);
+
+    const codigoPublico = await crearReservaConfirmada(app, auth);
+    await request(app).post(`/api/admin/reservations/${codigoPublico}/cancel`).set("Authorization", auth);
+    const segundaVez = await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/cancel`)
+      .set("Authorization", auth);
+    expect(segundaVez.status).toBe(409);
+  });
+
+  it("reprograma una reserva CONFIRMADA a otro horario (200) validando el cuerpo", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+    const codigoPublico = await crearReservaConfirmada(app, auth);
+
+    const cuerpoInvalido = await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/reschedule`)
+      .set("Authorization", auth)
+      .send({ date: FECHA_ISO, startTime: "10:00" }); // sin partySize
+    expect(cuerpoInvalido.status).toBe(400);
+
+    const respuesta = await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/reschedule`)
+      .set("Authorization", auth)
+      .send({ date: FECHA_ISO, startTime: "10:00", partySize: 5 });
+
+    expect(respuesta.status).toBe(200);
+    expect(respuesta.body.plan).toBeTruthy();
+    expect(fake.reservas.find((r) => r.codigoPublico === codigoPublico)!.cantidadPersonas).toBe(5);
+  });
+
+  it("devuelve 409 NO_DISPONIBLE si el nuevo horario no cabe", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+    const codigoPublico = await crearReservaConfirmada(app, auth);
+
+    const respuesta = await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/reschedule`)
+      .set("Authorization", auth)
+      .send({ date: FECHA_ISO, startTime: "12:00", partySize: 5 }); // hora de almuerzo: cerrado
+
+    expect(respuesta.status).toBe(409);
+  });
+
+  it("rechaza sin token (401) y con un rol sin permiso (403)", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+    const codigoPublico = await crearReservaConfirmada(app, auth);
+
+    const sinToken = await request(app).post(`/api/admin/reservations/${codigoPublico}/cancel`);
+    expect(sinToken.status).toBe(401);
+
+    const authSinPermiso = await tokenAdminDePrueba(fake, "OPERACION"); // fuera de ROLES_GESTIONAN_RESERVAS
+    const sinPermiso = await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/cancel`)
+      .set("Authorization", authSinPermiso);
+    expect(sinPermiso.status).toBe(403);
+  });
+});
