@@ -64,6 +64,7 @@ export interface FilaExcepcion {
   horaCierre: string | null;
   almuerzoInicio: string | null;
   almuerzoFin: string | null;
+  motivo?: string | null;
 }
 
 export interface FilaBloqueo {
@@ -326,10 +327,35 @@ export class FakePrisma {
   // -- Superficie usada por availability.service.ts -------------------------
 
   readonly scheduleException = {
-    findMany: async ({ where }: { where: { servicioId: Id; fecha: Date } }) =>
-      this.excepciones.filter(
-        (e) => e.servicioId === where.servicioId && mismaFecha(e.fecha, where.fecha),
-      ),
+    /** `where.fecha` acepta una fecha exacta (uso de availability.service.ts,
+     * resolverVentanasDelDia) o un rango `{gte, lt}` (uso de
+     * horarios.service.ts, listado por mes). */
+    findMany: async ({
+      where,
+    }: {
+      where: { servicioId: Id; fecha?: Date | { gte?: Date; lt?: Date } };
+    }) =>
+      this.excepciones
+        .filter((e) => {
+          if (e.servicioId !== where.servicioId) return false;
+          if (where.fecha === undefined) return true;
+          if (where.fecha instanceof Date) return mismaFecha(e.fecha, where.fecha);
+          if (where.fecha.gte !== undefined && e.fecha.getTime() < where.fecha.gte.getTime()) return false;
+          if (where.fecha.lt !== undefined && e.fecha.getTime() >= where.fecha.lt.getTime()) return false;
+          return true;
+        })
+        .sort((a, b) => a.fecha.getTime() - b.fecha.getTime()),
+    create: async ({ data }: { data: Omit<FilaExcepcion, "id"> }) => {
+      const fila: FilaExcepcion = { id: nuevoId("exc"), ...data };
+      this.excepciones.push(fila);
+      return fila;
+    },
+    delete: async ({ where }: { where: { id: Id } }) => {
+      const indice = this.excepciones.findIndex((e) => e.id === where.id);
+      if (indice === -1) throw new Error(`Excepcion ${where.id} no existe (fake)`);
+      const [fila] = this.excepciones.splice(indice, 1);
+      return fila!;
+    },
   };
 
   readonly scheduleTemplate = {
@@ -343,6 +369,33 @@ export class FakePrisma {
           p.servicioId === where.servicioId_diaSemana.servicioId &&
           p.diaSemana === where.servicioId_diaSemana.diaSemana,
       ) ?? null,
+    findMany: async ({ where, orderBy }: { where: { servicioId: Id }; orderBy?: { diaSemana?: "asc" | "desc" } }) => {
+      const filas = this.plantillas.filter((p) => p.servicioId === where.servicioId);
+      const signo = orderBy?.diaSemana === "desc" ? -1 : 1;
+      return [...filas].sort((a, b) => signo * (a.diaSemana - b.diaSemana));
+    },
+    upsert: async ({
+      where,
+      create,
+      update,
+    }: {
+      where: { servicioId_diaSemana: { servicioId: Id; diaSemana: number } };
+      create: Omit<FilaPlantilla, "id">;
+      update: Partial<FilaPlantilla>;
+    }) => {
+      const existente = this.plantillas.find(
+        (p) =>
+          p.servicioId === where.servicioId_diaSemana.servicioId &&
+          p.diaSemana === where.servicioId_diaSemana.diaSemana,
+      );
+      if (existente) {
+        Object.assign(existente, update);
+        return existente;
+      }
+      const fila: FilaPlantilla = { id: nuevoId("tpl"), ...create };
+      this.plantillas.push(fila);
+      return fila;
+    },
   };
 
   readonly administrativeBlock = {

@@ -560,3 +560,108 @@ describe("/api/admin/reservations/:publicCode/cancel y /reschedule (14.5-14.6)",
     expect(sinPermiso.status).toBe(403);
   });
 });
+
+describe("/api/admin/services/:serviceId/schedule (14.3)", () => {
+  it("crea/actualiza (upsert) la plantilla semanal de un dia", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const creacion = await request(app)
+      .put(`/api/admin/services/${SERVICIO_ID}/schedule/weekly/0`)
+      .set("Authorization", auth)
+      .send({ openTime: "09:00", closeTime: "16:00", lunchStart: "12:00", lunchEnd: "12:30" });
+    expect(creacion.status).toBe(200);
+    expect(creacion.body.template).toMatchObject({ diaSemana: 0, horaApertura: "09:00", activo: true });
+    expect(fake.plantillas).toHaveLength(1);
+
+    const actualizacion = await request(app)
+      .put(`/api/admin/services/${SERVICIO_ID}/schedule/weekly/0`)
+      .set("Authorization", auth)
+      .send({ openTime: "10:00", closeTime: "17:00" });
+    expect(actualizacion.status).toBe(200);
+    expect(fake.plantillas).toHaveLength(1); // no duplico, actualizo
+    expect(fake.plantillas[0]).toMatchObject({ horaApertura: "10:00", horaCierre: "17:00" });
+  });
+
+  it("valida el cuerpo y devuelve 400 con datos invalidos", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const sinCierre = await request(app)
+      .put(`/api/admin/services/${SERVICIO_ID}/schedule/weekly/0`)
+      .set("Authorization", auth)
+      .send({ openTime: "09:00" });
+    expect(sinCierre.status).toBe(400);
+
+    const invertido = await request(app)
+      .put(`/api/admin/services/${SERVICIO_ID}/schedule/weekly/0`)
+      .set("Authorization", auth)
+      .send({ openTime: "16:00", closeTime: "09:00" });
+    expect(invertido.status).toBe(400);
+  });
+
+  it("lista la plantilla semanal del servicio", async () => {
+    const fake = new FakePrisma();
+    fake.crearPlantilla({ id: "tpl-1", servicioId: SERVICIO_ID, diaSemana: 0, horaApertura: "09:00", horaCierre: "16:00" });
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const respuesta = await request(app)
+      .get(`/api/admin/services/${SERVICIO_ID}/schedule/weekly`)
+      .set("Authorization", auth);
+    expect(respuesta.status).toBe(200);
+    expect(respuesta.body.templates).toHaveLength(1);
+  });
+
+  it("crea, lista por mes y elimina una excepcion de calendario", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const cerrado = await request(app)
+      .post(`/api/admin/services/${SERVICIO_ID}/schedule/exceptions`)
+      .set("Authorization", auth)
+      .send({ date: "2026-12-25", type: "CERRADO", reason: "Navidad" });
+    expect(cerrado.status).toBe(201);
+    const exceptionId = cerrado.body.exceptionId as string;
+
+    const tipoInvalido = await request(app)
+      .post(`/api/admin/services/${SERVICIO_ID}/schedule/exceptions`)
+      .set("Authorization", auth)
+      .send({ date: "2026-12-26", type: "OTRO" });
+    expect(tipoInvalido.status).toBe(400);
+
+    const listado = await request(app)
+      .get(`/api/admin/services/${SERVICIO_ID}/schedule/exceptions?month=2026-12`)
+      .set("Authorization", auth);
+    expect(listado.status).toBe(200);
+    expect(listado.body.exceptions).toHaveLength(1);
+    expect(listado.body.exceptions[0]).toMatchObject({ tipo: "CERRADO", motivo: "Navidad" });
+
+    const eliminacion = await request(app)
+      .delete(`/api/admin/schedule/exceptions/${exceptionId}`)
+      .set("Authorization", auth);
+    expect(eliminacion.status).toBe(200);
+
+    const eliminacionOtraVez = await request(app)
+      .delete(`/api/admin/schedule/exceptions/${exceptionId}`)
+      .set("Authorization", auth);
+    expect(eliminacionOtraVez.status).toBe(404);
+  });
+
+  it("rechaza sin token (401) y con un rol sin permiso (403)", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+
+    const sinToken = await request(app).get(`/api/admin/services/${SERVICIO_ID}/schedule/weekly`);
+    expect(sinToken.status).toBe(401);
+
+    const authSinPermiso = await tokenAdminDePrueba(fake, "ATENCION"); // fuera de ROLES_GESTIONAN_HORARIOS
+    const sinPermiso = await request(app)
+      .get(`/api/admin/services/${SERVICIO_ID}/schedule/weekly`)
+      .set("Authorization", authSinPermiso);
+    expect(sinPermiso.status).toBe(403);
+  });
+});

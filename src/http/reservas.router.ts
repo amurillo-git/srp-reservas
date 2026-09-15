@@ -23,6 +23,13 @@ import { iniciarSesion } from "../services/auth.service.js";
 import { requireAuth } from "./auth.middleware.js";
 import { crearBloqueo, eliminarBloqueo, listarBloqueos } from "../services/bloqueos.service.js";
 import { cancelarReserva, reprogramarReserva } from "../services/gestion-reservas.service.js";
+import {
+  crearExcepcion,
+  eliminarExcepcion,
+  establecerPlantillaSemanal,
+  listarExcepciones,
+  listarPlantillaSemanal,
+} from "../services/horarios.service.js";
 
 /** 14.7: solo Administrador y Caja validan depositos SINPE. */
 const ROLES_VALIDAN_SINPE = ["ADMINISTRADOR", "CAJA"] as const;
@@ -30,6 +37,9 @@ const ROLES_VALIDAN_SINPE = ["ADMINISTRADOR", "CAJA"] as const;
 const ROLES_GESTIONAN_BLOQUEOS = ["ADMINISTRADOR"] as const;
 /** 14.7: Administrador y Atencion "crean y modifican reservas". */
 const ROLES_GESTIONAN_RESERVAS = ["ADMINISTRADOR", "ATENCION"] as const;
+/** 14.7: solo Administrador gestiona horarios. */
+const ROLES_GESTIONAN_HORARIOS = ["ADMINISTRADOR"] as const;
+const TIPOS_EXCEPCION = ["HABILITADO", "MODIFICADO", "CERRADO"] as const;
 
 const PATRON_FECHA = /^\d{4}-\d{2}-\d{2}$/;
 const PATRON_ANIO_MES = /^\d{4}-\d{2}$/;
@@ -392,6 +402,111 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
     requireAuth(ROLES_GESTIONAN_BLOQUEOS),
     conManejoDeErrores(async (req, res) => {
       const resultado = await eliminarBloqueo(prisma, req.params.id!);
+      if (resultado.ok) {
+        res.status(200).json({ ok: true });
+        return;
+      }
+      enviarError(res, 404, resultado.motivo);
+    }),
+  );
+
+  // 14.3, 18.3: gestion de horarios. Solo ADMINISTRADOR (14.7).
+  router.put(
+    "/admin/services/:serviceId/schedule/weekly/:dayOfWeek",
+    requireAuth(ROLES_GESTIONAN_HORARIOS),
+    conManejoDeErrores(async (req, res) => {
+      const diaSemana = Number(req.params.dayOfWeek);
+      const { openTime, closeTime, lunchStart, lunchEnd, active } = req.body ?? {};
+
+      if (typeof openTime !== "string" || !PATRON_HORA.test(openTime)) {
+        return enviarError(res, 400, "openTime debe tener el formato HH:mm");
+      }
+      if (typeof closeTime !== "string" || !PATRON_HORA.test(closeTime)) {
+        return enviarError(res, 400, "closeTime debe tener el formato HH:mm");
+      }
+      if (lunchStart !== undefined && (typeof lunchStart !== "string" || !PATRON_HORA.test(lunchStart))) {
+        return enviarError(res, 400, "lunchStart debe tener el formato HH:mm");
+      }
+      if (lunchEnd !== undefined && (typeof lunchEnd !== "string" || !PATRON_HORA.test(lunchEnd))) {
+        return enviarError(res, 400, "lunchEnd debe tener el formato HH:mm");
+      }
+      if (active !== undefined && typeof active !== "boolean") {
+        return enviarError(res, 400, "active debe ser booleano");
+      }
+
+      const resultado = await establecerPlantillaSemanal(prisma, req.params.serviceId!, diaSemana, {
+        horaApertura: openTime, horaCierre: closeTime, almuerzoInicio: lunchStart, almuerzoFin: lunchEnd, activo: active,
+      });
+
+      if (resultado.ok) {
+        res.status(200).json({ template: resultado.plantilla });
+        return;
+      }
+      enviarError(res, 400, resultado.motivo);
+    }),
+  );
+
+  router.get(
+    "/admin/services/:serviceId/schedule/weekly",
+    requireAuth(ROLES_GESTIONAN_HORARIOS),
+    conManejoDeErrores(async (req, res) => {
+      const templates = await listarPlantillaSemanal(prisma, req.params.serviceId!);
+      res.json({ templates });
+    }),
+  );
+
+  router.post(
+    "/admin/services/:serviceId/schedule/exceptions",
+    requireAuth(ROLES_GESTIONAN_HORARIOS),
+    conManejoDeErrores(async (req, res) => {
+      const { date, type, openTime, closeTime, lunchStart, lunchEnd, reason } = req.body ?? {};
+
+      if (typeof date !== "string" || !PATRON_FECHA.test(date)) {
+        return enviarError(res, 400, "date debe tener el formato YYYY-MM-DD");
+      }
+      if (typeof type !== "string" || !TIPOS_EXCEPCION.includes(type as (typeof TIPOS_EXCEPCION)[number])) {
+        return enviarError(res, 400, `type debe ser uno de: ${TIPOS_EXCEPCION.join(", ")}`);
+      }
+      for (const [nombre, valor] of Object.entries({ openTime, closeTime, lunchStart, lunchEnd })) {
+        if (valor !== undefined && (typeof valor !== "string" || !PATRON_HORA.test(valor))) {
+          return enviarError(res, 400, `${nombre} debe tener el formato HH:mm`);
+        }
+      }
+      if (reason !== undefined && typeof reason !== "string") {
+        return enviarError(res, 400, "reason debe ser texto");
+      }
+
+      const resultado = await crearExcepcion(prisma, req.params.serviceId!, {
+        fecha: date, tipo: type as "HABILITADO" | "MODIFICADO" | "CERRADO",
+        horaApertura: openTime, horaCierre: closeTime, almuerzoInicio: lunchStart, almuerzoFin: lunchEnd, motivo: reason,
+      });
+
+      if (resultado.ok) {
+        res.status(201).json({ exceptionId: resultado.excepcionId });
+        return;
+      }
+      enviarError(res, 400, resultado.motivo);
+    }),
+  );
+
+  router.get(
+    "/admin/services/:serviceId/schedule/exceptions",
+    requireAuth(ROLES_GESTIONAN_HORARIOS),
+    conManejoDeErrores(async (req, res) => {
+      const anioMes = req.query.month;
+      if (typeof anioMes !== "string" || !PATRON_ANIO_MES.test(anioMes)) {
+        return enviarError(res, 400, "month debe tener el formato YYYY-MM");
+      }
+      const exceptions = await listarExcepciones(prisma, req.params.serviceId!, anioMes);
+      res.json({ exceptions });
+    }),
+  );
+
+  router.delete(
+    "/admin/schedule/exceptions/:id",
+    requireAuth(ROLES_GESTIONAN_HORARIOS),
+    conManejoDeErrores(async (req, res) => {
+      const resultado = await eliminarExcepcion(prisma, req.params.id!);
       if (resultado.ok) {
         res.status(200).json({ ok: true });
         return;
