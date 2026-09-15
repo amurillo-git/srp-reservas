@@ -44,7 +44,10 @@ if (process.env.NODE_ENV !== "test") {
       // 19.1: libera heats de reservas TEMPORAL vencidas mientras el
       // servidor esta vivo (ver src/worker/expiracion-worker.ts).
       iniciarWorkerExpiracion(() => expirarReservasVencidas(prisma), intervaloExpiracionMs);
-      app.listen(port, () => {
+      // "0.0.0.0" explicito: algunos proxys de hosting (ej. Hostinger) solo
+      // conectan si el proceso escucha en todas las interfaces, no solo en
+      // el loopback que Node podria elegir por defecto.
+      app.listen(port, "0.0.0.0", () => {
         console.log(`API de Sarapiquí Race Park escuchando en el puerto ${port}`);
       });
     });
