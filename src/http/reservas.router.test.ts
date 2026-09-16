@@ -565,6 +565,21 @@ describe("/api/admin/blocks", () => {
     expect(fake.bloqueos).toHaveLength(1);
   });
 
+  it("registra un evento de auditoria (21) al crear y al eliminar un bloqueo", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const creacion = await request(app)
+      .post("/api/admin/blocks")
+      .set("Authorization", auth)
+      .send({ serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "10:00", endTime: "11:00" });
+    await request(app).delete(`/api/admin/blocks/${creacion.body.blockId}`).set("Authorization", auth);
+
+    expect(fake.eventosAuditoria.map((e) => e.accion)).toEqual(["BLOQUEO_CREADO", "BLOQUEO_ELIMINADO"]);
+    expect(fake.eventosAuditoria[0]).toMatchObject({ objetoTipo: "BLOQUEO", objetoId: creacion.body.blockId });
+  });
+
   it("9.22: devuelve 409 con las reservas en conflicto y no crea nada sin force", async () => {
     const fake = new FakePrisma();
     crearFixtureBase(fake);
@@ -739,6 +754,27 @@ describe("/api/admin/reservations/:publicCode/cancel y /reschedule (14.5-14.6)",
 
     expect(respuesta.status).toBe(200);
     expect(fake.reservas.find((r) => r.codigoPublico === codigoPublico)!.estado).toBe("CANCELADA");
+  });
+
+  it("registra un evento de auditoria (21) al cancelar y al reprogramar", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+    const codigoPublico = await crearReservaConfirmada(app, auth); // ya deja un evento SINPE_APROBADO
+    const eventosPrevios = fake.eventosAuditoria.length;
+
+    await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/reschedule`)
+      .set("Authorization", auth)
+      .send({ date: FECHA_ISO, startTime: "10:00", partySize: 5 });
+    await request(app).post(`/api/admin/reservations/${codigoPublico}/cancel`).set("Authorization", auth);
+
+    const acciones = fake.eventosAuditoria.slice(eventosPrevios).map((e) => e.accion);
+    expect(acciones).toEqual(["RESERVA_REPROGRAMADA", "RESERVA_CANCELADA"]);
+    expect(fake.eventosAuditoria.at(-1)).toMatchObject({
+      actorEmail: "administrador@srp.test", objetoTipo: "RESERVA", objetoId: codigoPublico,
+    });
   });
 
   it("devuelve 404 al cancelar un codigo inexistente y 409 al cancelar dos veces", async () => {
@@ -984,6 +1020,59 @@ describe("/api/admin/services/:serviceId/schedule (14.3)", () => {
     const sinPermiso = await request(app)
       .get(`/api/admin/services/${SERVICIO_ID}/schedule/weekly`)
       .set("Authorization", authSinPermiso);
+    expect(sinPermiso.status).toBe(403);
+  });
+});
+
+describe("GET /api/admin/audit-events (21)", () => {
+  it("lista los eventos mas recientes primero y filtra por accion y objectId", async () => {
+    const fake = new FakePrisma();
+    fake.eventosAuditoria.push(
+      { id: "1", actorUserId: "u1", actorEmail: "a@srp.test", accion: "RESERVA_CANCELADA", objetoTipo: "RESERVA", objetoId: "SRP-1", valoresAnteriores: null, valoresNuevos: null, creadoEn: new Date("2026-09-10T10:00:00Z") },
+      { id: "2", actorUserId: "u1", actorEmail: "a@srp.test", accion: "BLOQUEO_CREADO", objetoTipo: "BLOQUEO", objetoId: "blk-1", valoresAnteriores: null, valoresNuevos: null, creadoEn: new Date("2026-09-11T10:00:00Z") },
+    );
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const sinFiltro = await request(app).get("/api/admin/audit-events").set("Authorization", auth);
+    expect(sinFiltro.status).toBe(200);
+    expect(sinFiltro.body.eventos.map((e: { id: string }) => e.id)).toEqual(["2", "1"]);
+
+    const porAccion = await request(app)
+      .get("/api/admin/audit-events")
+      .query({ action: "BLOQUEO_CREADO" })
+      .set("Authorization", auth);
+    expect(porAccion.body.eventos.map((e: { id: string }) => e.id)).toEqual(["2"]);
+
+    const porObjeto = await request(app)
+      .get("/api/admin/audit-events")
+      .query({ objectId: "SRP-1" })
+      .set("Authorization", auth);
+    expect(porObjeto.body.eventos.map((e: { id: string }) => e.id)).toEqual(["1"]);
+  });
+
+  it("valida el formato de from/to", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const respuesta = await request(app)
+      .get("/api/admin/audit-events")
+      .query({ from: "no-es-una-fecha" })
+      .set("Authorization", auth);
+
+    expect(respuesta.status).toBe(400);
+  });
+
+  it("rechaza sin token (401) y con un rol distinto de ADMINISTRADOR (403)", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+
+    const sinToken = await request(app).get("/api/admin/audit-events");
+    expect(sinToken.status).toBe(401);
+
+    const authSinPermiso = await tokenAdminDePrueba(fake, "OPERACION");
+    const sinPermiso = await request(app).get("/api/admin/audit-events").set("Authorization", authSinPermiso);
     expect(sinPermiso.status).toBe(403);
   });
 });

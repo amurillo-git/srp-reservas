@@ -312,6 +312,35 @@ model User {
   @@map("users")
 }
 
+/// Auditoria de acciones administrativas (21). Alcance de este slice: solo
+/// las 7 acciones del panel que ya tienen un actor humano claro (cancelar y
+/// reprogramar reserva, aprobar/rechazar SINPE, horario semanal, excepciones
+/// y bloqueos). Deliberadamente fuera de alcance: eventos sin un actor
+/// administrativo claro (reserva de clientes, asignacion/liberacion de
+/// participantes, creacion de heats/lotes, confirmaciones de la pasarela,
+/// vencimientos automaticos) y acciones sobre precios/usuarios (no existen
+/// pantallas para esas acciones todavia). Sin relacion FK a User: un usuario
+/// borrado o editado despues no debe alterar el registro historico, por eso
+/// actorEmail queda copiado tal como era al momento del evento.
+model AuditEvent {
+  id                String   @id @default(cuid())
+  /// Null solo si en el futuro se registra un evento sin usuario logueado
+  /// (fuera de alcance de este slice: todas las acciones aqui pasan por
+  /// requireAuth, asi que siempre hay un actor).
+  actorUserId       String?  @map("actor_user_id")
+  actorEmail        String?  @map("actor_email")
+  accion            String
+  objetoTipo        String   @map("objeto_tipo")
+  objetoId          String   @map("objeto_id")
+  valoresAnteriores Json?    @map("valores_anteriores")
+  valoresNuevos     Json?    @map("valores_nuevos")
+  creadoEn          DateTime @default(now()) @map("creado_en")
+
+  @@index([objetoTipo, objetoId])
+  @@index([creadoEn])
+  @@map("audit_events")
+}
+
 // ----------------------------------------------------------------------------
 // Integridad NO expresable en Prisma 5.x (sin @check nativo) — requiere
 // migracion SQL manual posterior o queda enforced en la transaccion (16.6):

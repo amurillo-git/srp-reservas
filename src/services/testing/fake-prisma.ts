@@ -33,6 +33,18 @@ export interface FilaUsuario {
   activo: boolean;
 }
 
+export interface FilaEventoAuditoria {
+  id: Id;
+  actorUserId: Id | null;
+  actorEmail: string | null;
+  accion: string;
+  objetoTipo: string;
+  objetoId: string;
+  valoresAnteriores: unknown;
+  valoresNuevos: unknown;
+  creadoEn: Date;
+}
+
 export interface FilaServicio {
   id: Id;
   nombre: string;
@@ -191,6 +203,7 @@ export class FakePrisma {
   readonly reservas: FilaReserva[] = [];
   readonly comprobantesSinpe: FilaComprobanteSinpe[] = [];
   readonly usuarios: FilaUsuario[] = [];
+  readonly eventosAuditoria: FilaEventoAuditoria[] = [];
 
   private proximoConflictoUnico: { tabla: "heat" | "reservation"; target: string; vecesRestantes: number } | null =
     null;
@@ -714,6 +727,41 @@ export class FakePrisma {
       const fila: FilaUsuario = { id: nuevoId("user"), rol: "ATENCION", activo: true, ...data };
       this.usuarios.push(fila);
       return fila;
+    },
+  };
+
+  /** Solo-escritura + lectura (21): sin `update`/`delete`, igual que la
+   * tabla real (los eventos de auditoria no se modifican desde la app). */
+  readonly auditEvent = {
+    create: async ({
+      data,
+    }: {
+      data: Omit<FilaEventoAuditoria, "id" | "creadoEn"> & { creadoEn?: Date };
+    }) => {
+      const fila: FilaEventoAuditoria = { id: nuevoId("evt"), creadoEn: new Date(), ...data };
+      this.eventosAuditoria.push(fila);
+      return fila;
+    },
+    findMany: async ({
+      where,
+      orderBy,
+      take,
+    }: {
+      where?: { accion?: string; objetoId?: string; creadoEn?: { gte?: Date; lte?: Date } };
+      orderBy?: { creadoEn?: "asc" | "desc" };
+      take?: number;
+    }) => {
+      let filas = this.eventosAuditoria.filter((e) => {
+        if (where?.accion !== undefined && e.accion !== where.accion) return false;
+        if (where?.objetoId !== undefined && e.objetoId !== where.objetoId) return false;
+        if (where?.creadoEn?.gte !== undefined && e.creadoEn.getTime() < where.creadoEn.gte.getTime()) return false;
+        if (where?.creadoEn?.lte !== undefined && e.creadoEn.getTime() > where.creadoEn.lte.getTime()) return false;
+        return true;
+      });
+      const signo = orderBy?.creadoEn === "asc" ? 1 : -1;
+      filas = [...filas].sort((a, b) => signo * (a.creadoEn.getTime() - b.creadoEn.getTime()));
+      if (typeof take === "number") filas = filas.slice(0, take);
+      return filas;
     },
   };
 

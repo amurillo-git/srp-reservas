@@ -21,7 +21,8 @@ import {
 import { aprobarSinpe, rechazarSinpe, reportarComprobanteSinpe } from "../services/pagos.service.js";
 import { crearSesionPago, procesarWebhookOnvo } from "../services/pago-tarjeta.service.js";
 import { iniciarSesion } from "../services/auth.service.js";
-import { requireAuth } from "./auth.middleware.js";
+import { requireAuth, type RequestAutenticado } from "./auth.middleware.js";
+import { listarEventos, registrarEvento, type ActorAuditoria } from "../services/auditoria.service.js";
 import { crearBloqueo, eliminarBloqueo, listarBloqueos } from "../services/bloqueos.service.js";
 import { cancelarReserva, reprogramarReserva } from "../services/gestion-reservas.service.js";
 import { calendarioOperativoDelDia } from "../services/calendario-operativo.service.js";
@@ -58,6 +59,8 @@ const ROLES_VEN_REPORTES = ["ADMINISTRADOR", "CAJA"] as const;
  * calendario operativo (propuesta.md, tabla de roles); Administrador
  * mantiene acceso a todo. */
 const ROLES_VEN_CALENDARIO = ["ADMINISTRADOR", "OPERACION"] as const;
+/** 21: la auditoria es informacion sensible de accountability, solo Administrador. */
+const ROLES_VEN_AUDITORIA = ["ADMINISTRADOR"] as const;
 const TIPOS_EXCEPCION = ["HABILITADO", "MODIFICADO", "CERRADO"] as const;
 const ESTADOS_RESERVA = [
   "TEMPORAL", "PENDIENTE_VALIDACION_SINPE", "CONFIRMADA", "RECHAZADA", "CANCELADA", "EXPIRADA",
@@ -87,6 +90,14 @@ function conManejoDeErrores(
   return (req, res, next) => {
     handler(req, res).catch(next);
   };
+}
+
+/** Actor de auditoria (21) desde el JWT que `requireAuth` ya valido y
+ * adjunto a `req.usuario`. Solo se llama dentro de rutas protegidas con
+ * requireAuth, asi que `usuario` siempre esta presente en ese punto. */
+function actorDesde(req: Request): ActorAuditoria {
+  const usuario = (req as RequestAutenticado).usuario!;
+  return { userId: usuario.userId, email: usuario.email };
 }
 
 /** Valida `serviceId`, `from` y `to` (compartidos por la mayoria de los
@@ -341,6 +352,10 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
     conManejoDeErrores(async (req, res) => {
       const resultado = await aprobarSinpe(prisma, req.params.publicCode!);
       if (resultado.ok) {
+        await registrarEvento(prisma, actorDesde(req), {
+          accion: "SINPE_APROBADO", objetoTipo: "RESERVA", objetoId: req.params.publicCode!,
+          valoresNuevos: { estado: "CONFIRMADA" },
+        });
         res.status(200).json({ ok: true });
         return;
       }
@@ -360,6 +375,10 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
 
       const resultado = await rechazarSinpe(prisma, req.params.publicCode!, motivo);
       if (resultado.ok) {
+        await registrarEvento(prisma, actorDesde(req), {
+          accion: "SINPE_RECHAZADO", objetoTipo: "RESERVA", objetoId: req.params.publicCode!,
+          valoresNuevos: { estado: "RECHAZADA", motivo },
+        });
         res.status(200).json({ ok: true });
         return;
       }
@@ -410,6 +429,10 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
     conManejoDeErrores(async (req, res) => {
       const resultado = await cancelarReserva(prisma, req.params.publicCode!);
       if (resultado.ok) {
+        await registrarEvento(prisma, actorDesde(req), {
+          accion: "RESERVA_CANCELADA", objetoTipo: "RESERVA", objetoId: req.params.publicCode!,
+          valoresNuevos: { estado: "CANCELADA" },
+        });
         res.status(200).json({ ok: true });
         return;
       }
@@ -439,6 +462,10 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
       });
 
       if (resultado.ok) {
+        await registrarEvento(prisma, actorDesde(req), {
+          accion: "RESERVA_REPROGRAMADA", objetoTipo: "RESERVA", objetoId: req.params.publicCode!,
+          valoresNuevos: { fecha: date, horaInicio: startTime, cantidadPersonas: partySize },
+        });
         res.status(200).json({ plan: resultado.plan });
         return;
       }
@@ -479,6 +506,10 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
       });
 
       if (resultado.ok) {
+        await registrarEvento(prisma, actorDesde(req), {
+          accion: "BLOQUEO_CREADO", objetoTipo: "BLOQUEO", objetoId: resultado.bloqueoId,
+          valoresNuevos: { serviceId, date, startTime, endTime, reason },
+        });
         res.status(201).json({ blockId: resultado.bloqueoId });
         return;
       }
@@ -512,6 +543,9 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
     conManejoDeErrores(async (req, res) => {
       const resultado = await eliminarBloqueo(prisma, req.params.id!);
       if (resultado.ok) {
+        await registrarEvento(prisma, actorDesde(req), {
+          accion: "BLOQUEO_ELIMINADO", objetoTipo: "BLOQUEO", objetoId: req.params.id!,
+        });
         res.status(200).json({ ok: true });
         return;
       }
@@ -548,6 +582,11 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
       });
 
       if (resultado.ok) {
+        await registrarEvento(prisma, actorDesde(req), {
+          accion: "HORARIO_SEMANAL_ACTUALIZADO", objetoTipo: "PLANTILLA_HORARIO",
+          objetoId: `${req.params.serviceId}:${diaSemana}`,
+          valoresNuevos: { openTime, closeTime, lunchStart, lunchEnd, active },
+        });
         res.status(200).json({ template: resultado.plantilla });
         return;
       }
@@ -591,6 +630,10 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
       });
 
       if (resultado.ok) {
+        await registrarEvento(prisma, actorDesde(req), {
+          accion: "EXCEPCION_HORARIO_CREADA", objetoTipo: "EXCEPCION_HORARIO", objetoId: resultado.excepcionId,
+          valoresNuevos: { date, type, openTime, closeTime, lunchStart, lunchEnd, reason },
+        });
         res.status(201).json({ exceptionId: resultado.excepcionId });
         return;
       }
@@ -617,6 +660,9 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
     conManejoDeErrores(async (req, res) => {
       const resultado = await eliminarExcepcion(prisma, req.params.id!);
       if (resultado.ok) {
+        await registrarEvento(prisma, actorDesde(req), {
+          accion: "EXCEPCION_HORARIO_ELIMINADA", objetoTipo: "EXCEPCION_HORARIO", objetoId: req.params.id!,
+        });
         res.status(200).json({ ok: true });
         return;
       }
@@ -742,6 +788,35 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
       if (!rango) return;
       const reporte = await cancelacionesYReprogramaciones(prisma, rango.serviceId, rango.from, rango.to);
       res.json(reporte);
+    }),
+  );
+
+  // 21: auditoria de solo lectura. Ver el comentario de cabecera de
+  // auditoria.service.ts para el alcance exacto (que acciones se registran
+  // y cuales quedan deliberadamente fuera).
+  router.get(
+    "/admin/audit-events",
+    requireAuth(ROLES_VEN_AUDITORIA),
+    conManejoDeErrores(async (req, res) => {
+      const accion = req.query.action;
+      const objetoId = req.query.objectId;
+      const from = req.query.from;
+      const to = req.query.to;
+
+      if (from !== undefined && (typeof from !== "string" || !PATRON_FECHA.test(from))) {
+        return enviarError(res, 400, "from debe tener el formato YYYY-MM-DD");
+      }
+      if (to !== undefined && (typeof to !== "string" || !PATRON_FECHA.test(to))) {
+        return enviarError(res, 400, "to debe tener el formato YYYY-MM-DD");
+      }
+
+      const eventos = await listarEventos(prisma, {
+        accion: typeof accion === "string" ? accion : undefined,
+        objetoId: typeof objetoId === "string" ? objetoId : undefined,
+        desde: from as string | undefined,
+        hasta: to as string | undefined,
+      });
+      res.json({ eventos });
     }),
   );
 

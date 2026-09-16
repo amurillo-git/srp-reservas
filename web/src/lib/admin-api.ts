@@ -343,3 +343,42 @@ export async function obtenerCalendarioOperativo(
     token,
   );
 }
+
+// ----------------------------------------------------------------------------
+// Auditoria (21): historial de acciones administrativas, solo lectura.
+// ----------------------------------------------------------------------------
+
+export interface EventoAuditoria {
+  readonly id: string;
+  readonly actorEmail: string | null;
+  readonly accion: string;
+  readonly objetoTipo: string;
+  readonly objetoId: string;
+  readonly valoresAnteriores: unknown;
+  readonly valoresNuevos: unknown;
+  readonly creadoEn: string;
+}
+
+export interface FiltrosAuditoria {
+  readonly action?: string;
+  readonly objectId?: string;
+  readonly from?: string;
+  readonly to?: string;
+}
+
+export async function obtenerEventosAuditoria(
+  token: string,
+  filtros: FiltrosAuditoria,
+): Promise<readonly EventoAuditoria[]> {
+  const params = new URLSearchParams();
+  if (filtros.action) params.set("action", filtros.action);
+  if (filtros.objectId) params.set("objectId", filtros.objectId);
+  if (filtros.from) params.set("from", filtros.from);
+  if (filtros.to) params.set("to", filtros.to);
+
+  const { eventos } = await obtenerJsonAdmin<{ eventos: EventoAuditoria[] }>(
+    `/admin/audit-events?${params.toString()}`,
+    token,
+  );
+  return eventos;
+}
