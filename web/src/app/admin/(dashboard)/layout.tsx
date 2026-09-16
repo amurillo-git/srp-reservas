@@ -1,10 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "cn";
 import { borrarSesion, obtenerSesion } from "@/lib/admin-auth";
+
+const ENLACES = [
+  { href: "/admin", etiqueta: "Inicio" },
+  { href: "/admin/schedule", etiqueta: "Horarios y bloqueos" },
+] as const;
 
 /** Protege todas las rutas de este grupo: sin sesion valida, redirige a
  * /admin/login (fuera del grupo, sin este guard). No hay servidor propio
@@ -13,6 +20,7 @@ import { borrarSesion, obtenerSesion } from "@/lib/admin-auth";
  * mientras se revisa localStorage, para no destellar el contenido admin. */
 export default function AdminDashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
   const [autorizado, setAutorizado] = useState(false);
 
   useEffect(() => {
@@ -33,9 +41,23 @@ export default function AdminDashboardLayout({ children }: { children: React.Rea
 
   return (
     <div className="flex flex-1 flex-col">
-      <header className="flex items-center justify-between border-b bg-background px-4 py-3 sm:px-6">
+      <header className="flex flex-col gap-3 border-b bg-background px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6">
         <span className="font-heading text-sm font-medium">Sarapiquí Race Park — Panel administrativo</span>
-        <Button variant="ghost" size="sm" onClick={cerrarSesion}>
+        <nav className="flex items-center gap-1">
+          {ENLACES.map((enlace) => (
+            <Link
+              key={enlace.href}
+              href={enlace.href}
+              className={cn(
+                "rounded-lg px-2.5 py-1 text-sm font-medium transition-colors hover:bg-muted",
+                pathname === enlace.href && "bg-muted text-foreground",
+              )}
+            >
+              {enlace.etiqueta}
+            </Link>
+          ))}
+        </nav>
+        <Button variant="ghost" size="sm" onClick={cerrarSesion} className="w-fit">
           <LogOut data-icon="inline-start" />
           Cerrar sesión
         </Button>
