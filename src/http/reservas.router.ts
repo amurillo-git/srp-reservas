@@ -24,6 +24,7 @@ import { iniciarSesion } from "../services/auth.service.js";
 import { requireAuth } from "./auth.middleware.js";
 import { crearBloqueo, eliminarBloqueo, listarBloqueos } from "../services/bloqueos.service.js";
 import { cancelarReserva, reprogramarReserva } from "../services/gestion-reservas.service.js";
+import { calendarioOperativoDelDia } from "../services/calendario-operativo.service.js";
 import {
   crearExcepcion,
   eliminarExcepcion,
@@ -53,6 +54,10 @@ const ROLES_GESTIONAN_RESERVAS = ["ADMINISTRADOR", "ATENCION"] as const;
 const ROLES_GESTIONAN_HORARIOS = ["ADMINISTRADOR"] as const;
 /** 14.7: mismos roles que validan SINPE (administracion + manejo de dinero). */
 const ROLES_VEN_REPORTES = ["ADMINISTRADOR", "CAJA"] as const;
+/** 14.7: "Operador del parque" es el rol pensado para consultar el
+ * calendario operativo (propuesta.md, tabla de roles); Administrador
+ * mantiene acceso a todo. */
+const ROLES_VEN_CALENDARIO = ["ADMINISTRADOR", "OPERACION"] as const;
 const TIPOS_EXCEPCION = ["HABILITADO", "MODIFICADO", "CERRADO"] as const;
 const ESTADOS_RESERVA = [
   "TEMPORAL", "PENDIENTE_VALIDACION_SINPE", "CONFIRMADA", "RECHAZADA", "CANCELADA", "EXPIRADA",
@@ -616,6 +621,22 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
         return;
       }
       enviarError(res, 404, resultado.motivo);
+    }),
+  );
+
+  // 14.2, 18.3: calendario operativo (vista diaria/semanal de lotes y heats
+  // para el operador del parque). Solo lectura: editar horarios/bloqueos ya
+  // existe en sus propias rutas.
+  router.get(
+    "/admin/services/:serviceId/operational-calendar",
+    requireAuth(ROLES_VEN_CALENDARIO),
+    conManejoDeErrores(async (req, res) => {
+      const date = req.query.date;
+      if (typeof date !== "string" || !PATRON_FECHA.test(date)) {
+        return enviarError(res, 400, "date debe tener el formato YYYY-MM-DD");
+      }
+      const calendario = await calendarioOperativoDelDia(prisma, req.params.serviceId!, date);
+      res.json(calendario);
     }),
   );
 

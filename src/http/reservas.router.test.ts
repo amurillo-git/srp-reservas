@@ -816,6 +816,73 @@ describe("/api/admin/reservations/:publicCode/cancel y /reschedule (14.5-14.6)",
   });
 });
 
+describe("GET /api/admin/services/:serviceId/operational-calendar (14.2)", () => {
+  it("devuelve lotes, heats, ventana del dia y bloqueos para un admin autenticado", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const lote = fake.crearLote({
+      id: "lote-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
+      horaInicio: "09:00", horaFinUltimoHeat: "09:15", horaInicioLimpieza: "09:15", horaFinLimpieza: "09:30", cantidadHeats: 1,
+    });
+    fake.crearHeat({ id: "heat-1", loteId: lote.id, servicioId: SERVICIO_ID, fecha: FECHA_DATE, horaInicio: "09:00", horaFin: "09:15", posicionEnLote: 1 });
+    fake.crearBloqueo({ id: "blk-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE, horaInicio: "10:00", horaFin: "10:30" });
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const respuesta = await request(app)
+      .get(`/api/admin/services/${SERVICIO_ID}/operational-calendar`)
+      .query({ date: FECHA_ISO })
+      .set("Authorization", auth);
+
+    expect(respuesta.status).toBe(200);
+    expect(respuesta.body.ventanas).toEqual([
+      { horaApertura: "09:00", horaCierre: "16:00", almuerzoInicio: "12:00", almuerzoFin: "12:30" },
+    ]);
+    expect(respuesta.body.lotes).toHaveLength(1);
+    expect(respuesta.body.lotes[0].heats).toEqual([
+      { heatId: "heat-1", horaInicio: "09:00", horaFin: "09:15", capacidadMaxima: 5, reservas: [] },
+    ]);
+    expect(respuesta.body.bloqueos).toHaveLength(1);
+  });
+
+  it("valida el formato de date", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const respuesta = await request(app)
+      .get(`/api/admin/services/${SERVICIO_ID}/operational-calendar`)
+      .query({ date: "no-es-una-fecha" })
+      .set("Authorization", auth);
+
+    expect(respuesta.status).toBe(400);
+  });
+
+  it("permite el rol OPERACION y rechaza sin token (401) o con un rol sin permiso (403)", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+
+    const sinToken = await request(app)
+      .get(`/api/admin/services/${SERVICIO_ID}/operational-calendar`)
+      .query({ date: FECHA_ISO });
+    expect(sinToken.status).toBe(401);
+
+    const authOperacion = await tokenAdminDePrueba(fake, "OPERACION");
+    const conOperacion = await request(app)
+      .get(`/api/admin/services/${SERVICIO_ID}/operational-calendar`)
+      .query({ date: FECHA_ISO })
+      .set("Authorization", authOperacion);
+    expect(conOperacion.status).toBe(200);
+
+    const authSinPermiso = await tokenAdminDePrueba(fake, "CAJA");
+    const sinPermiso = await request(app)
+      .get(`/api/admin/services/${SERVICIO_ID}/operational-calendar`)
+      .query({ date: FECHA_ISO })
+      .set("Authorization", authSinPermiso);
+    expect(sinPermiso.status).toBe(403);
+  });
+});
+
 describe("/api/admin/services/:serviceId/schedule (14.3)", () => {
   it("crea/actualiza (upsert) la plantilla semanal de un dia", async () => {
     const fake = new FakePrisma();

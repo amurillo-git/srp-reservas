@@ -292,3 +292,54 @@ export async function reprogramarReservaAdmin(
   if (status === 200) return { ok: true };
   return { ok: false, motivo: cuerpo.motivo ?? "No se pudo reprogramar la reserva" };
 }
+
+// ----------------------------------------------------------------------------
+// Calendario operativo (14.2): vista diaria/semanal de lotes y heats.
+// ----------------------------------------------------------------------------
+
+export interface ReservaDeHeat {
+  readonly codigoPublico: string;
+  readonly cantidadPersonas: number;
+  readonly estado: string;
+}
+
+export interface HeatOperativo {
+  readonly heatId: string;
+  readonly horaInicio: string;
+  readonly horaFin: string;
+  readonly capacidadMaxima: number;
+  readonly reservas: readonly ReservaDeHeat[];
+}
+
+export interface LoteOperativo {
+  readonly loteId: string;
+  readonly horaInicio: string;
+  readonly horaFinUltimoHeat: string;
+  readonly horaInicioLimpieza: string;
+  readonly horaFinLimpieza: string;
+  readonly heats: readonly HeatOperativo[];
+}
+
+export interface VentanaDelDia {
+  readonly horaApertura: string;
+  readonly horaCierre: string;
+  readonly almuerzoInicio: string | null;
+  readonly almuerzoFin: string | null;
+}
+
+export interface CalendarioOperativoDelDia {
+  readonly ventanas: readonly VentanaDelDia[];
+  readonly lotes: readonly LoteOperativo[];
+  readonly bloqueos: readonly BloqueoAdmin[];
+}
+
+export async function obtenerCalendarioOperativo(
+  token: string,
+  serviceId: string,
+  date: string,
+): Promise<CalendarioOperativoDelDia> {
+  return obtenerJsonAdmin<CalendarioOperativoDelDia>(
+    `/admin/services/${serviceId}/operational-calendar?date=${date}`,
+    token,
+  );
+}

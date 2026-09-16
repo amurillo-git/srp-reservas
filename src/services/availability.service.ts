@@ -105,14 +105,17 @@ export function fechaISOaDate(fecha: FechaISO): Date {
   return new Date(`${fecha}T00:00:00.000Z`);
 }
 
-interface VentanaHoraria {
+export interface VentanaHoraria {
   readonly horaApertura: HoraISO;
   readonly horaCierre: HoraISO;
   readonly almuerzoInicio: HoraISO | null;
   readonly almuerzoFin: HoraISO | null;
 }
 
-async function resolverVentanasDelDia(
+/** Exportada para calendario-operativo.service.ts (14.2): la vista operativa
+ * necesita la MISMA resolucion de apertura/almuerzo (plantilla semanal vs.
+ * excepcion) que usa el motor de disponibilidad, sin reimplementarla. */
+export async function resolverVentanasDelDia(
   cliente: ClientePrisma,
   servicioId: IdServicio,
   fecha: FechaISO,
