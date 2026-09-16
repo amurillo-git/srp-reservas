@@ -628,6 +628,89 @@ describe("/api/admin/blocks", () => {
   });
 });
 
+describe("GET /api/admin/reservations/search (14.5)", () => {
+  function crearReservaEnFake(fake: FakePrisma, datos: { id: string; fecha: Date; estado: string; clienteNombre?: string; clienteTelefono?: string }) {
+    fake.reservas.push({
+      id: datos.id, codigoPublico: `SRP-${datos.id}`, servicioId: SERVICIO_ID, fecha: datos.fecha,
+      cantidadPersonas: 2, estado: datos.estado, moneda: "CRC", montoTotal: 8000, montoDeposito: 4000, montoSaldo: 4000,
+      claveIdempotencia: `idem-${datos.id}`, clienteNombre: datos.clienteNombre ?? "Cliente", clienteTelefono: datos.clienteTelefono ?? "88888888",
+      expiraEn: null,
+    });
+  }
+
+  it("devuelve reservas del servicio sin filtros, mas recientes primero", async () => {
+    const fake = new FakePrisma();
+    crearReservaEnFake(fake, { id: "1", fecha: new Date("2026-09-10"), estado: "CONFIRMADA" });
+    crearReservaEnFake(fake, { id: "2", fecha: new Date("2026-09-12"), estado: "CONFIRMADA" });
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const respuesta = await request(app)
+      .get("/api/admin/reservations/search")
+      .query({ serviceId: SERVICIO_ID })
+      .set("Authorization", auth);
+
+    expect(respuesta.status).toBe(200);
+    expect(respuesta.body.reservas.map((r: { codigoPublico: string }) => r.codigoPublico)).toEqual(["SRP-2", "SRP-1"]);
+  });
+
+  it("filtra por texto libre (q) y por estado", async () => {
+    const fake = new FakePrisma();
+    crearReservaEnFake(fake, { id: "1", fecha: new Date("2026-09-10"), estado: "CONFIRMADA", clienteNombre: "Ana Perez" });
+    crearReservaEnFake(fake, { id: "2", fecha: new Date("2026-09-10"), estado: "CANCELADA", clienteNombre: "Beto Soto" });
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const porTexto = await request(app)
+      .get("/api/admin/reservations/search")
+      .query({ serviceId: SERVICIO_ID, q: "ana" })
+      .set("Authorization", auth);
+    expect(porTexto.body.reservas.map((r: { codigoPublico: string }) => r.codigoPublico)).toEqual(["SRP-1"]);
+
+    const porEstado = await request(app)
+      .get("/api/admin/reservations/search")
+      .query({ serviceId: SERVICIO_ID, status: "CANCELADA" })
+      .set("Authorization", auth);
+    expect(porEstado.body.reservas.map((r: { codigoPublico: string }) => r.codigoPublico)).toEqual(["SRP-2"]);
+  });
+
+  it("valida serviceId requerido y el formato de from/to", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const sinServicio = await request(app).get("/api/admin/reservations/search").set("Authorization", auth);
+    expect(sinServicio.status).toBe(400);
+
+    const fechaInvalida = await request(app)
+      .get("/api/admin/reservations/search")
+      .query({ serviceId: SERVICIO_ID, from: "no-es-una-fecha" })
+      .set("Authorization", auth);
+    expect(fechaInvalida.status).toBe(400);
+
+    const estadoInvalido = await request(app)
+      .get("/api/admin/reservations/search")
+      .query({ serviceId: SERVICIO_ID, status: "NO_EXISTE" })
+      .set("Authorization", auth);
+    expect(estadoInvalido.status).toBe(400);
+  });
+
+  it("rechaza sin token (401) y con un rol sin permiso (403)", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+
+    const sinToken = await request(app).get("/api/admin/reservations/search").query({ serviceId: SERVICIO_ID });
+    expect(sinToken.status).toBe(401);
+
+    const authSinPermiso = await tokenAdminDePrueba(fake, "CAJA"); // fuera de ROLES_GESTIONAN_RESERVAS
+    const sinPermiso = await request(app)
+      .get("/api/admin/reservations/search")
+      .query({ serviceId: SERVICIO_ID })
+      .set("Authorization", authSinPermiso);
+    expect(sinPermiso.status).toBe(403);
+  });
+});
+
 describe("/api/admin/reservations/:publicCode/cancel y /reschedule (14.5-14.6)", () => {
   async function crearReservaConfirmada(app: Express, auth: string): Promise<string> {
     const creacion = await request(app)

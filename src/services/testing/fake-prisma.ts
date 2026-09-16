@@ -615,17 +615,25 @@ export class FakePrisma {
       if (!fila) throw new Error("No encontrado (fake)");
       return fila;
     },
-    /** Filtra por `estado`, `servicioId`, rango de `fecha` y/o
-     * `expiraEn: { lte }` (uso de expiracion.service.ts para reservas
-     * TEMPORAL vencidas, 19.1, y de reportes.service.ts para los reportes
-     * administrativos, 25). Todos los campos de `where` son opcionales;
-     * `orderBy.fecha` ordena el resultado (uso de sinpePendientes). */
+    /** Filtra por `estado`, `servicioId`, rango de `fecha`, `expiraEn: { lte
+     * }` y/o `OR` de coincidencias `contains` (uso de
+     * reportes.service.ts#buscarReservas, 14.5, para su texto libre sobre
+     * codigo/nombre/telefono). Todos los campos de `where` son opcionales;
+     * `orderBy.fecha` ordena el resultado y `take` corta el total (14.5). */
     findMany: async ({
       where,
       orderBy,
+      take,
     }: {
-      where: { estado?: string; servicioId?: Id; fecha?: { gte?: Date; lte?: Date }; expiraEn?: { lte: Date } };
+      where: {
+        estado?: string;
+        servicioId?: Id;
+        fecha?: { gte?: Date; lte?: Date };
+        expiraEn?: { lte: Date };
+        OR?: readonly Record<string, { contains: string; mode?: "insensitive" }>[];
+      };
       orderBy?: { fecha?: "asc" | "desc" };
+      take?: number;
     }) => {
       let filas = this.reservas.filter((r) => {
         if (where.estado !== undefined && r.estado !== where.estado) return false;
@@ -635,11 +643,25 @@ export class FakePrisma {
         if (where.expiraEn?.lte !== undefined) {
           if (r.expiraEn === null || r.expiraEn.getTime() > where.expiraEn.lte.getTime()) return false;
         }
+        if (where.OR !== undefined) {
+          const coincide = where.OR.some((condicion) => {
+            const [campo, filtro] = Object.entries(condicion)[0]!;
+            const valor = String((r as unknown as Record<string, unknown>)[campo] ?? "");
+            const insensible = filtro.mode === "insensitive";
+            const objetivo = insensible ? valor.toLowerCase() : valor;
+            const buscado = insensible ? filtro.contains.toLowerCase() : filtro.contains;
+            return objetivo.includes(buscado);
+          });
+          if (!coincide) return false;
+        }
         return true;
       });
       if (orderBy?.fecha !== undefined) {
         const signo = orderBy.fecha === "desc" ? -1 : 1;
         filas = [...filas].sort((a, b) => signo * (a.fecha.getTime() - b.fecha.getTime()));
+      }
+      if (typeof take === "number") {
+        filas = filas.slice(0, take);
       }
       return filas;
     },

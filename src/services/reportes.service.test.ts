@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import {
+  buscarReservas,
   cancelacionesYReprogramaciones,
   depositosPorMetodoPago,
   ocupacionHeatsDelDia,
@@ -169,6 +170,88 @@ describe("reservasVencidas", () => {
     const resultado = await reservasVencidas(comoPrisma(fake), SERVICIO_ID, "2026-09-05", "2026-09-15");
 
     expect(resultado.map((r) => r.codigoPublico)).toEqual(["SRP-1"]);
+  });
+});
+
+describe("buscarReservas", () => {
+  it("sin filtros devuelve las reservas del servicio, mas recientes primero", async () => {
+    const fake = new FakePrisma();
+    crearReserva(fake, { id: "1", fecha: new Date("2026-09-10") });
+    crearReserva(fake, { id: "2", fecha: new Date("2026-09-12") });
+    crearReserva(fake, { id: "3", fecha: new Date("2026-09-11"), servicioId: "otro-servicio" });
+
+    const resultado = await buscarReservas(comoPrisma(fake), SERVICIO_ID, {});
+
+    expect(resultado.map((r) => r.codigoPublico)).toEqual(["SRP-2", "SRP-1"]);
+  });
+
+  it("filtra por texto libre que coincide con codigo, nombre o telefono, sin distinguir mayusculas", async () => {
+    const fake = new FakePrisma();
+    crearReserva(fake, { id: "1", fecha: new Date("2026-09-10"), clienteNombre: "Ana Perez", clienteTelefono: "88881111" });
+    crearReserva(fake, { id: "2", fecha: new Date("2026-09-10"), clienteNombre: "Beto Soto", clienteTelefono: "88882222" });
+
+    expect((await buscarReservas(comoPrisma(fake), SERVICIO_ID, { q: "srp-1" })).map((r) => r.codigoPublico)).toEqual([
+      "SRP-1",
+    ]);
+    expect((await buscarReservas(comoPrisma(fake), SERVICIO_ID, { q: "beto" })).map((r) => r.codigoPublico)).toEqual([
+      "SRP-2",
+    ]);
+    expect((await buscarReservas(comoPrisma(fake), SERVICIO_ID, { q: "1111" })).map((r) => r.codigoPublico)).toEqual([
+      "SRP-1",
+    ]);
+  });
+
+  it("filtra por estado", async () => {
+    const fake = new FakePrisma();
+    crearReserva(fake, { id: "1", fecha: new Date("2026-09-10"), estado: "CONFIRMADA" });
+    crearReserva(fake, { id: "2", fecha: new Date("2026-09-10"), estado: "CANCELADA" });
+
+    const resultado = await buscarReservas(comoPrisma(fake), SERVICIO_ID, { estado: "CANCELADA" });
+
+    expect(resultado.map((r) => r.codigoPublico)).toEqual(["SRP-2"]);
+  });
+
+  it("filtra por rango de fechas, aceptando solo desde o solo hasta", async () => {
+    const fake = new FakePrisma();
+    crearReserva(fake, { id: "1", fecha: new Date("2026-09-05") });
+    crearReserva(fake, { id: "2", fecha: new Date("2026-09-10") });
+    crearReserva(fake, { id: "3", fecha: new Date("2026-09-15") });
+
+    const desde = await buscarReservas(comoPrisma(fake), SERVICIO_ID, { desde: "2026-09-10" });
+    expect(desde.map((r) => r.codigoPublico).sort()).toEqual(["SRP-2", "SRP-3"]);
+
+    const hasta = await buscarReservas(comoPrisma(fake), SERVICIO_ID, { hasta: "2026-09-10" });
+    expect(hasta.map((r) => r.codigoPublico).sort()).toEqual(["SRP-1", "SRP-2"]);
+  });
+
+  it("combina texto libre y estado", async () => {
+    const fake = new FakePrisma();
+    crearReserva(fake, { id: "1", fecha: new Date("2026-09-10"), estado: "CONFIRMADA", clienteNombre: "Ana" });
+    crearReserva(fake, { id: "2", fecha: new Date("2026-09-10"), estado: "CANCELADA", clienteNombre: "Ana" });
+
+    const resultado = await buscarReservas(comoPrisma(fake), SERVICIO_ID, { q: "ana", estado: "CONFIRMADA" });
+
+    expect(resultado.map((r) => r.codigoPublico)).toEqual(["SRP-1"]);
+  });
+
+  it("incluye vecesReprogramada en cada resultado", async () => {
+    const fake = new FakePrisma();
+    crearReserva(fake, { id: "1", fecha: new Date("2026-09-10"), vecesReprogramada: 2 });
+
+    const resultado = await buscarReservas(comoPrisma(fake), SERVICIO_ID, {});
+
+    expect(resultado[0]!.vecesReprogramada).toBe(2);
+  });
+
+  it("limita a 100 resultados", async () => {
+    const fake = new FakePrisma();
+    for (let i = 0; i < 150; i++) {
+      crearReserva(fake, { id: `${i}`, fecha: new Date(2026, 8, 1 + (i % 28)) });
+    }
+
+    const resultado = await buscarReservas(comoPrisma(fake), SERVICIO_ID, {});
+
+    expect(resultado).toHaveLength(100);
   });
 });
 

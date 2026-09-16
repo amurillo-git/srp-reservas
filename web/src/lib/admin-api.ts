@@ -226,3 +226,69 @@ export async function eliminarExcepcion(token: string, id: string): Promise<bool
   const { status } = await enviarJsonAdmin("DELETE", `/admin/schedule/exceptions/${id}`, token);
   return status === 200;
 }
+
+// ----------------------------------------------------------------------------
+// Gestion de reservas (14.5): busqueda, cancelacion y reprogramacion.
+// ----------------------------------------------------------------------------
+
+export interface ReservaBusqueda {
+  readonly codigoPublico: string;
+  readonly fecha: string;
+  readonly cantidadPersonas: number;
+  readonly clienteNombre: string;
+  readonly clienteTelefono: string;
+  readonly estado: string;
+  readonly vecesReprogramada: number;
+}
+
+export interface FiltrosBusquedaReservas {
+  readonly q?: string;
+  readonly status?: string;
+  readonly from?: string;
+  readonly to?: string;
+}
+
+export async function buscarReservasAdmin(
+  token: string,
+  serviceId: string,
+  filtros: FiltrosBusquedaReservas,
+): Promise<readonly ReservaBusqueda[]> {
+  const params = new URLSearchParams({ serviceId });
+  if (filtros.q) params.set("q", filtros.q);
+  if (filtros.status) params.set("status", filtros.status);
+  if (filtros.from) params.set("from", filtros.from);
+  if (filtros.to) params.set("to", filtros.to);
+
+  const { reservas } = await obtenerJsonAdmin<{ reservas: ReservaBusqueda[] }>(
+    `/admin/reservations/search?${params.toString()}`,
+    token,
+  );
+  return reservas;
+}
+
+export type ResultadoAccionReserva = { readonly ok: true } | { readonly ok: false; readonly motivo: string };
+
+export async function cancelarReservaAdmin(token: string, codigoPublico: string): Promise<ResultadoAccionReserva> {
+  const { status, datos } = await enviarJsonAdmin<{ motivo?: string }>(
+    "POST",
+    `/admin/reservations/${codigoPublico}/cancel`,
+    token,
+  );
+  if (status === 200) return { ok: true };
+  return { ok: false, motivo: datos.motivo ?? "No se pudo cancelar la reserva" };
+}
+
+export async function reprogramarReservaAdmin(
+  token: string,
+  codigoPublico: string,
+  datos: { date: string; startTime: string; partySize: number },
+): Promise<ResultadoAccionReserva> {
+  const { status, datos: cuerpo } = await enviarJsonAdmin<{ motivo?: string }>(
+    "POST",
+    `/admin/reservations/${codigoPublico}/reschedule`,
+    token,
+    datos,
+  );
+  if (status === 200) return { ok: true };
+  return { ok: false, motivo: cuerpo.motivo ?? "No se pudo reprogramar la reserva" };
+}

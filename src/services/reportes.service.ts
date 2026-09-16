@@ -17,7 +17,7 @@
 // experiencia/heat), no la fecha en que se creo o confirmo el registro.
 // ============================================================================
 
-import type { PrismaClient } from "@prisma/client";
+import type { EstadoReserva, PrismaClient } from "@prisma/client";
 import { fechaISOaDate } from "./availability.service.js";
 import { CAPACIDAD_MAXIMA_POR_HEAT, type FechaISO } from "../motor-disponibilidad/motor-disponibilidad.js";
 
@@ -170,6 +170,65 @@ export interface ReservaResumen {
   readonly cantidadPersonas: number;
   readonly clienteNombre: string;
   readonly clienteTelefono: string;
+}
+
+export interface FiltrosBusquedaReservas {
+  /** Texto libre: coincide con codigoPublico, clienteNombre o clienteTelefono. */
+  readonly q?: string;
+  readonly estado?: EstadoReserva;
+  readonly desde?: FechaISO;
+  readonly hasta?: FechaISO;
+}
+
+export interface ReservaBusqueda extends ReservaResumen {
+  readonly estado: string;
+  readonly vecesReprogramada: number;
+}
+
+/** Tope duro de resultados (14.5): esta pantalla es para encontrar UNA
+ * reserva puntual, no para exportar la tabla completa; sin filtros (o con
+ * filtros muy amplios) simplemente se corta aqui en vez de traer todo. */
+const LIMITE_RESULTADOS_BUSQUEDA = 100;
+
+/** Busqueda de reservas para el panel administrativo (14.5): combina texto
+ * libre (codigo/nombre/telefono), estado y rango de fecha, todos opcionales.
+ * Sin ningun filtro, devuelve las mas recientes del servicio (topadas por
+ * LIMITE_RESULTADOS_BUSQUEDA) para que la pantalla nunca quede vacia sin
+ * explicacion. */
+export async function buscarReservas(
+  prisma: PrismaClient,
+  servicioId: string,
+  filtros: FiltrosBusquedaReservas,
+): Promise<readonly ReservaBusqueda[]> {
+  const texto = filtros.q?.trim();
+  const fecha: { gte?: Date; lte?: Date } = {};
+  if (filtros.desde) fecha.gte = fechaISOaDate(filtros.desde);
+  if (filtros.hasta) fecha.lte = fechaISOaDate(filtros.hasta);
+
+  const reservas = await prisma.reservation.findMany({
+    where: {
+      servicioId,
+      ...(filtros.estado ? { estado: filtros.estado } : {}),
+      ...(fecha.gte || fecha.lte ? { fecha } : {}),
+      ...(texto
+        ? {
+            OR: [
+              { codigoPublico: { contains: texto, mode: "insensitive" as const } },
+              { clienteNombre: { contains: texto, mode: "insensitive" as const } },
+              { clienteTelefono: { contains: texto } },
+            ],
+          }
+        : {}),
+    },
+    orderBy: { fecha: "desc" },
+    take: LIMITE_RESULTADOS_BUSQUEDA,
+  });
+
+  return reservas.map((reserva) => ({
+    ...comoResumen(reserva),
+    estado: reserva.estado,
+    vecesReprogramada: reserva.vecesReprogramada ?? 0,
+  }));
 }
 
 function comoResumen(reserva: {

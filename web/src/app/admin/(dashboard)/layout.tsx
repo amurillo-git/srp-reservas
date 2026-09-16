@@ -10,6 +10,7 @@ import { borrarSesion, obtenerSesion } from "@/lib/admin-auth";
 
 const ENLACES = [
   { href: "/admin", etiqueta: "Inicio" },
+  { href: "/admin/reservations", etiqueta: "Gestión de reservas" },
   { href: "/admin/schedule", etiqueta: "Horarios y bloqueos" },
 ] as const;
 

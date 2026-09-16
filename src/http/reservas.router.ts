@@ -32,6 +32,7 @@ import {
   listarPlantillaSemanal,
 } from "../services/horarios.service.js";
 import {
+  buscarReservas,
   cancelacionesYReprogramaciones,
   depositosPorMetodoPago,
   ocupacionHeatsDelDia,
@@ -53,6 +54,9 @@ const ROLES_GESTIONAN_HORARIOS = ["ADMINISTRADOR"] as const;
 /** 14.7: mismos roles que validan SINPE (administracion + manejo de dinero). */
 const ROLES_VEN_REPORTES = ["ADMINISTRADOR", "CAJA"] as const;
 const TIPOS_EXCEPCION = ["HABILITADO", "MODIFICADO", "CERRADO"] as const;
+const ESTADOS_RESERVA = [
+  "TEMPORAL", "PENDIENTE_VALIDACION_SINPE", "CONFIRMADA", "RECHAZADA", "CANCELADA", "EXPIRADA",
+] as const;
 
 const PATRON_FECHA = /^\d{4}-\d{2}-\d{2}$/;
 const PATRON_ANIO_MES = /^\d{4}-\d{2}$/;
@@ -356,6 +360,41 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
       }
       const status = resultado.motivo === "NO_ENCONTRADA" ? 404 : 409;
       enviarError(res, status, resultado.motivo);
+    }),
+  );
+
+  // 14.5: busqueda de reservas para el panel (encontrar una reserva antes de
+  // poder cancelarla/reprogramarla). Mismos roles que esas dos acciones.
+  router.get(
+    "/admin/reservations/search",
+    requireAuth(ROLES_GESTIONAN_RESERVAS),
+    conManejoDeErrores(async (req, res) => {
+      const serviceId = req.query.serviceId;
+      const q = req.query.q;
+      const status = req.query.status;
+      const from = req.query.from;
+      const to = req.query.to;
+
+      if (typeof serviceId !== "string" || serviceId.length === 0) {
+        return enviarError(res, 400, "serviceId es requerido");
+      }
+      if (from !== undefined && (typeof from !== "string" || !PATRON_FECHA.test(from))) {
+        return enviarError(res, 400, "from debe tener el formato YYYY-MM-DD");
+      }
+      if (to !== undefined && (typeof to !== "string" || !PATRON_FECHA.test(to))) {
+        return enviarError(res, 400, "to debe tener el formato YYYY-MM-DD");
+      }
+      if (status !== undefined && !ESTADOS_RESERVA.includes(status as (typeof ESTADOS_RESERVA)[number])) {
+        return enviarError(res, 400, `status debe ser uno de: ${ESTADOS_RESERVA.join(", ")}`);
+      }
+
+      const reservas = await buscarReservas(prisma, serviceId, {
+        q: typeof q === "string" ? q : undefined,
+        estado: status as (typeof ESTADOS_RESERVA)[number] | undefined,
+        desde: from as string | undefined,
+        hasta: to as string | undefined,
+      });
+      res.json({ reservas });
     }),
   );
 
