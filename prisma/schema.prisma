@@ -253,6 +253,10 @@ model Reservation {
   /// 6.9.8: motivo obligatorio al rechazar un deposito SINPE.
   motivoRechazo     String?       @map("motivo_rechazo")
   rechazadaEn       DateTime?     @map("rechazada_en")
+  /// Sesion de Checkout de ONVO (6.8): la crea pago-tarjeta.service.ts al
+  /// iniciar el pago con tarjeta; el webhook de ONVO la usa para encontrar
+  /// la reserva sin depender del codigo publico, que ONVO no conoce.
+  pagoTarjetaSesionId String?     @unique(map: "reservations_pago_tarjeta_sesion_id_key") @map("pago_tarjeta_sesion_id")
 
   servicio      Service          @relation(fields: [servicioId], references: [id])
   asignaciones  HeatAllocation[]

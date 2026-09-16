@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import express, { type Express } from "express";
 import request from "supertest";
 import type { PrismaClient } from "@prisma/client";
@@ -15,6 +15,9 @@ import { emitirToken, hashearContrasena } from "../services/auth.service.js";
 
 beforeAll(() => {
   process.env.JWT_SECRET = "secreto-de-prueba-no-usar-en-produccion";
+  process.env.ONVO_SECRET_KEY = "onvo_test_secret_key_fake";
+  process.env.ONVO_WEBHOOK_SECRET = "webhook_secret_fake";
+  process.env.WEB_APP_URL = "https://reservas.sarapiquiracepark.com";
 });
 
 function crearApp(prisma: PrismaClient): Express {
@@ -329,6 +332,73 @@ describe("flujo SINPE (POST .../sinpe-evidence, admin confirm/reject-sinpe)", ()
       .post(`/api/admin/reservations/${codigoPublico}/confirm-sinpe`)
       .set("Authorization", authSinPermiso);
     expect(sinPermiso.status).toBe(403);
+  });
+});
+
+describe("flujo de pago con tarjeta (POST .../card-payment, POST /webhooks/onvo)", () => {
+  async function crearReservaTemporal(app: Express): Promise<string> {
+    const creacion = await request(app)
+      .post("/api/reservations")
+      .set("Idempotency-Key", `idem-tarjeta-${Date.now()}-${Math.random()}`)
+      .send({
+        serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "09:00", partySize: 5,
+        customer: { name: "Ana", phone: "8888-0000" },
+      });
+    return creacion.body.codigoPublico as string;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("crea la sesion de Checkout y, cuando ONVO notifica el pago, confirma la reserva (6.8)", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const codigoPublico = await crearReservaTemporal(app);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ id: "clcs0001", url: "https://checkout.onvopay.com/pay/clcs0001" }), { status: 201 })),
+    );
+
+    const sesion = await request(app).post(`/api/reservations/${codigoPublico}/card-payment`);
+    expect(sesion.status).toBe(200);
+    expect(sesion.body.checkoutUrl).toBe("https://checkout.onvopay.com/pay/clcs0001");
+    expect(fake.reservas.find((r) => r.codigoPublico === codigoPublico)!.estado).toBe("TEMPORAL");
+
+    const webhook = await request(app)
+      .post("/api/webhooks/onvo")
+      .set("X-Webhook-Secret", "webhook_secret_fake")
+      .send({ type: "checkout-session.succeeded", data: { id: "clcs0001", paymentStatus: "paid" } });
+    expect(webhook.status).toBe(200);
+    expect(fake.reservas.find((r) => r.codigoPublico === codigoPublico)!.estado).toBe("CONFIRMADA");
+  });
+
+  it("devuelve 404 al crear una sesion de pago para un codigo inexistente", async () => {
+    const app = crearApp(comoPrisma(new FakePrisma()));
+    const respuesta = await request(app).post("/api/reservations/SRP-NOEXISTE/card-payment");
+    expect(respuesta.status).toBe(404);
+  });
+
+  it("devuelve 502 si ONVO responde con error al crear la sesion", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const codigoPublico = await crearReservaTemporal(app);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 500 })));
+
+    const respuesta = await request(app).post(`/api/reservations/${codigoPublico}/card-payment`);
+    expect(respuesta.status).toBe(502);
+  });
+
+  it("rechaza el webhook (401) si el X-Webhook-Secret no coincide", async () => {
+    const app = crearApp(comoPrisma(new FakePrisma()));
+    const respuesta = await request(app)
+      .post("/api/webhooks/onvo")
+      .set("X-Webhook-Secret", "secreto-incorrecto")
+      .send({ type: "checkout-session.succeeded", data: { id: "clcs0001", paymentStatus: "paid" } });
+    expect(respuesta.status).toBe(401);
   });
 });
 

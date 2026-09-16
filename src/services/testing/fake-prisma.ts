@@ -126,6 +126,7 @@ export interface FilaReserva {
   confirmadaEn?: Date | null;
   canceladaEn?: Date | null;
   expiraEn: Date | null;
+  pagoTarjetaSesionId?: string | null;
 }
 
 /** Forma de los argumentos que `heat.findMany` realmente recibe: de
@@ -586,14 +587,15 @@ export class FakePrisma {
     findUnique: async ({
       where,
     }: {
-      where: { claveIdempotencia?: string; id?: Id; codigoPublico?: string };
+      where: { claveIdempotencia?: string; id?: Id; codigoPublico?: string; pagoTarjetaSesionId?: string };
     }) => {
       const encontrada =
         this.reservas.find(
           (r) =>
             (where.id !== undefined && r.id === where.id) ||
             (where.claveIdempotencia !== undefined && r.claveIdempotencia === where.claveIdempotencia) ||
-            (where.codigoPublico !== undefined && r.codigoPublico === where.codigoPublico),
+            (where.codigoPublico !== undefined && r.codigoPublico === where.codigoPublico) ||
+            (where.pagoTarjetaSesionId !== undefined && r.pagoTarjetaSesionId === where.pagoTarjetaSesionId),
         ) ?? null;
       this.onReservationFindUnique?.();
       return encontrada;

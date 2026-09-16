@@ -19,6 +19,7 @@ import {
   listarServiciosActivos,
 } from "../services/availability.service.js";
 import { aprobarSinpe, rechazarSinpe, reportarComprobanteSinpe } from "../services/pagos.service.js";
+import { crearSesionPago, procesarWebhookOnvo } from "../services/pago-tarjeta.service.js";
 import { iniciarSesion } from "../services/auth.service.js";
 import { requireAuth } from "./auth.middleware.js";
 import { crearBloqueo, eliminarBloqueo, listarBloqueos } from "../services/bloqueos.service.js";
@@ -240,6 +241,37 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
         return;
       }
       const status = resultado.motivo === "NO_ENCONTRADA" ? 404 : 409;
+      enviarError(res, status, resultado.motivo);
+    }),
+  );
+
+  // 6.8: pago con tarjeta via ONVO (checkout hospedado).
+  router.post(
+    "/reservations/:publicCode/card-payment",
+    conManejoDeErrores(async (req, res) => {
+      const resultado = await crearSesionPago(prisma, req.params.publicCode!);
+      if (resultado.ok) {
+        res.status(200).json({ checkoutUrl: resultado.checkoutUrl });
+        return;
+      }
+      const status = resultado.motivo === "NO_ENCONTRADA" ? 404 : resultado.motivo === "ERROR_PROVEEDOR" ? 502 : 409;
+      enviarError(res, status, resultado.motivo);
+    }),
+  );
+
+  // Sin requireAuth: la llama ONVO, no un usuario administrativo. La
+  // autenticidad se valida con el header X-Webhook-Secret (ver
+  // pago-tarjeta.service.ts), no con el JWT del panel.
+  router.post(
+    "/webhooks/onvo",
+    conManejoDeErrores(async (req, res) => {
+      const resultado = await procesarWebhookOnvo(prisma, req.header("X-Webhook-Secret"), req.body);
+      if (resultado.ok) {
+        res.status(200).json({ ok: true });
+        return;
+      }
+      const status =
+        resultado.motivo === "FIRMA_INVALIDA" ? 401 : resultado.motivo === "NO_ENCONTRADA" ? 404 : 409;
       enviarError(res, status, resultado.motivo);
     }),
   );
