@@ -188,6 +188,24 @@ function comoResumen(reserva: {
   };
 }
 
+export interface ReservaDelDia extends ReservaResumen {
+  readonly estado: string;
+}
+
+/** Reservas del dia (14.1, dashboard admin): todas las reservas de la
+ * fecha dada, sin filtrar por estado (el panel decide como distinguirlas
+ * visualmente). */
+export async function reservasDelDia(
+  prisma: PrismaClient,
+  servicioId: string,
+  fecha: FechaISO,
+): Promise<readonly ReservaDelDia[]> {
+  const reservas = await prisma.reservation.findMany({
+    where: { servicioId, fecha: rangoFechas(fecha, fecha) },
+  });
+  return reservas.map((reserva) => ({ ...comoResumen(reserva), estado: reserva.estado }));
+}
+
 /** SINPE pendientes (25): foto del momento, no se acota por fecha porque
  * son depositos que siguen esperando validacion HOY, sin importar cuando
  * sea la experiencia. */

@@ -426,6 +426,24 @@ describe("/api/admin/reports (25)", () => {
     expect(respuesta.body.reporte).toEqual([{ fecha: "2026-09-10", estado: "CONFIRMADA", cantidad: 1 }]);
   });
 
+  it("14.1: devuelve la lista de reservas de un dia puntual (no solo el conteo)", async () => {
+    const fake = new FakePrisma();
+    crearReservaEnFake(fake, "1", new Date("2026-09-10"), "CONFIRMADA");
+    crearReservaEnFake(fake, "2", new Date("2026-09-11"), "CONFIRMADA"); // otro dia, no debe salir
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const respuesta = await request(app)
+      .get("/api/admin/reports/reservations-of-day")
+      .query({ serviceId: SERVICIO_ID, date: "2026-09-10" })
+      .set("Authorization", auth);
+
+    expect(respuesta.status).toBe(200);
+    expect(respuesta.body.reporte).toEqual([
+      { codigoPublico: "SRP-1", fecha: "2026-09-10", cantidadPersonas: 2, clienteNombre: "Cliente", clienteTelefono: "88888888", estado: "CONFIRMADA" },
+    ]);
+  });
+
   it("valida from/to con el formato YYYY-MM-DD", async () => {
     const fake = new FakePrisma();
     const app = crearApp(comoPrisma(fake));

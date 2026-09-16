@@ -1,0 +1,32 @@
+// Sesion del panel administrativo: solo un token JWT + rol en localStorage.
+// No hay servidor propio (export estatico) que pueda guardar una cookie de
+// sesion, asi que el token vive en el navegador y viaja como
+// "Authorization: Bearer <token>" en cada llamada admin (ver admin-api.ts).
+
+const CLAVE_TOKEN = "srp_admin_token";
+const CLAVE_ROL = "srp_admin_rol";
+
+export interface SesionAdmin {
+  readonly token: string;
+  readonly rol: string;
+}
+
+/** `localStorage` no existe durante el build estatico (Next prerenderiza
+ * los Client Components a HTML): estas funciones solo deben llamarse desde
+ * un efecto o un manejador de evento, nunca en el cuerpo del componente. */
+export function obtenerSesion(): SesionAdmin | null {
+  const token = window.localStorage.getItem(CLAVE_TOKEN);
+  const rol = window.localStorage.getItem(CLAVE_ROL);
+  if (!token || !rol) return null;
+  return { token, rol };
+}
+
+export function guardarSesion(sesion: SesionAdmin): void {
+  window.localStorage.setItem(CLAVE_TOKEN, sesion.token);
+  window.localStorage.setItem(CLAVE_ROL, sesion.rol);
+}
+
+export function borrarSesion(): void {
+  window.localStorage.removeItem(CLAVE_TOKEN);
+  window.localStorage.removeItem(CLAVE_ROL);
+}

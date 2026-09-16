@@ -36,6 +36,7 @@ import {
   depositosPorMetodoPago,
   ocupacionHeatsDelDia,
   participantesPorDia,
+  reservasDelDia,
   reservasPorFechaYEstado,
   reservasVencidas,
   sinpePendientes,
@@ -587,6 +588,25 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
       const rango = leerRangoFechas(req, res);
       if (!rango) return;
       const reporte = await reservasPorFechaYEstado(prisma, rango.serviceId, rango.from, rango.to);
+      res.json({ reporte });
+    }),
+  );
+
+  // 14.1: dashboard admin. Lista real (no solo conteo) de las reservas de un
+  // dia puntual, para poder hacer clic en cada una.
+  router.get(
+    "/admin/reports/reservations-of-day",
+    requireAuth(ROLES_VEN_REPORTES),
+    conManejoDeErrores(async (req, res) => {
+      const serviceId = req.query.serviceId;
+      const date = req.query.date;
+      if (typeof serviceId !== "string" || serviceId.length === 0) {
+        return enviarError(res, 400, "serviceId es requerido");
+      }
+      if (typeof date !== "string" || !PATRON_FECHA.test(date)) {
+        return enviarError(res, 400, "date debe tener el formato YYYY-MM-DD");
+      }
+      const reporte = await reservasDelDia(prisma, serviceId, date);
       res.json({ reporte });
     }),
   );

@@ -5,6 +5,7 @@ import {
   depositosPorMetodoPago,
   ocupacionHeatsDelDia,
   participantesPorDia,
+  reservasDelDia,
   reservasPorFechaYEstado,
   reservasVencidas,
   sinpePendientes,
@@ -124,6 +125,23 @@ describe("depositosPorMetodoPago", () => {
     expect(resultado).toEqual([
       { metodo: "SINPE", totalDepositos: 4000, cantidadReservas: 1 },
       { metodo: "TARJETA", totalDepositos: 8000, cantidadReservas: 2 },
+    ]);
+  });
+});
+
+describe("reservasDelDia", () => {
+  it("lista todas las reservas de la fecha sin filtrar por estado", async () => {
+    const fake = new FakePrisma();
+    crearReserva(fake, { id: "1", fecha: new Date("2026-09-10"), estado: "CONFIRMADA" });
+    crearReserva(fake, { id: "2", fecha: new Date("2026-09-10"), estado: "TEMPORAL" });
+    crearReserva(fake, { id: "3", fecha: new Date("2026-09-11"), estado: "CONFIRMADA" }); // otro dia
+    crearReserva(fake, { id: "4", fecha: new Date("2026-09-10"), estado: "CONFIRMADA", servicioId: "otro-servicio" });
+
+    const resultado = await reservasDelDia(comoPrisma(fake), SERVICIO_ID, "2026-09-10");
+
+    expect(resultado.map((r) => ({ codigoPublico: r.codigoPublico, estado: r.estado }))).toEqual([
+      { codigoPublico: "SRP-1", estado: "CONFIRMADA" },
+      { codigoPublico: "SRP-2", estado: "TEMPORAL" },
     ]);
   });
 });
