@@ -2,13 +2,20 @@ import "dotenv/config";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
 import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { crearRouterReservas } from "./http/reservas.router.js";
 import { asegurarAdminInicial } from "./services/auth.service.js";
 import { expirarReservasVencidas } from "./services/expiracion.service.js";
 import { iniciarWorkerExpiracion } from "./worker/expiracion-worker.js";
 
 const app = express();
-const prisma = new PrismaClient();
+// Adaptador de conexion (pg) en vez del motor de consultas nativo de Prisma
+// (Rust): en el hosting compartido de produccion, el motor nativo entra en
+// PANIC: timer has gone away por el limite de procesos del sistema operativo
+// (ver https://github.com/prisma/prisma/issues/28222). El adaptador usa el
+// driver `pg` puro en JS y evita ese motor por completo.
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
+const prisma = new PrismaClient({ adapter });
 
 // Origen de la app de reservas (Next.js, carpeta web/), separada de esta API
 // (18.3): sin esto, el navegador bloquea las llamadas fetch desde otro
