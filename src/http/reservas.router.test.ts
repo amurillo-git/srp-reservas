@@ -402,6 +402,90 @@ describe("flujo de pago con tarjeta (POST .../card-payment, POST /webhooks/onvo)
   });
 });
 
+describe("/api/admin/reports (25)", () => {
+  function crearReservaEnFake(fake: FakePrisma, id: string, fecha: Date, estado: string) {
+    fake.reservas.push({
+      id, codigoPublico: `SRP-${id}`, servicioId: SERVICIO_ID, fecha, cantidadPersonas: 2, estado,
+      moneda: "CRC", montoTotal: 8000, montoDeposito: 4000, montoSaldo: 4000,
+      claveIdempotencia: `idem-${id}`, clienteNombre: "Cliente", clienteTelefono: "88888888", expiraEn: null,
+    });
+  }
+
+  it("devuelve el reporte de reservas por fecha y estado a un admin autenticado", async () => {
+    const fake = new FakePrisma();
+    crearReservaEnFake(fake, "1", new Date("2026-09-10"), "CONFIRMADA");
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const respuesta = await request(app)
+      .get("/api/admin/reports/reservations-by-date-status")
+      .query({ serviceId: SERVICIO_ID, from: "2026-09-01", to: "2026-09-30" })
+      .set("Authorization", auth);
+
+    expect(respuesta.status).toBe(200);
+    expect(respuesta.body.reporte).toEqual([{ fecha: "2026-09-10", estado: "CONFIRMADA", cantidad: 1 }]);
+  });
+
+  it("valida from/to con el formato YYYY-MM-DD", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const respuesta = await request(app)
+      .get("/api/admin/reports/reservations-by-date-status")
+      .query({ serviceId: SERVICIO_ID, from: "no-es-una-fecha", to: "2026-09-30" })
+      .set("Authorization", auth);
+
+    expect(respuesta.status).toBe(400);
+  });
+
+  it("rechaza sin token (401) y con un rol sin permiso (403)", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+
+    const sinToken = await request(app)
+      .get("/api/admin/reports/pending-sinpe")
+      .query({ serviceId: SERVICIO_ID });
+    expect(sinToken.status).toBe(401);
+
+    const authSinPermiso = await tokenAdminDePrueba(fake, "ATENCION");
+    const sinPermiso = await request(app)
+      .get("/api/admin/reports/pending-sinpe")
+      .query({ serviceId: SERVICIO_ID })
+      .set("Authorization", authSinPermiso);
+    expect(sinPermiso.status).toBe(403);
+  });
+
+  it("devuelve el reporte de ocupacion para un dia puntual", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const respuesta = await request(app)
+      .get("/api/admin/reports/occupancy")
+      .query({ serviceId: SERVICIO_ID, date: "2026-09-10" })
+      .set("Authorization", auth);
+
+    expect(respuesta.status).toBe(200);
+    expect(respuesta.body.reporte).toEqual([]);
+  });
+
+  it("devuelve el reporte de cancelaciones y reprogramaciones como objeto (no arreglo)", async () => {
+    const fake = new FakePrisma();
+    crearReservaEnFake(fake, "1", new Date("2026-09-10"), "CANCELADA");
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const respuesta = await request(app)
+      .get("/api/admin/reports/cancellations-and-reschedules")
+      .query({ serviceId: SERVICIO_ID, from: "2026-09-01", to: "2026-09-30" })
+      .set("Authorization", auth);
+
+    expect(respuesta.status).toBe(200);
+    expect(respuesta.body).toEqual({ cancelaciones: 1, reprogramaciones: 0 });
+  });
+});
+
 describe("POST /api/admin/login", () => {
   it("valida email y password", async () => {
     const app = crearApp(comoPrisma(new FakePrisma()));

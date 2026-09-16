@@ -179,6 +179,9 @@ export async function reprogramarReserva(
               montoTotal: planFinal.precio?.montoTotal ?? reserva.montoTotal,
               montoDeposito: planFinal.precio?.montoDeposito ?? reserva.montoDeposito,
               montoSaldo: planFinal.precio?.montoSaldo ?? reserva.montoSaldo,
+              // 25.8: contador minimo para el reporte de reprogramaciones,
+              // sin necesitar un historial de auditoria completo.
+              vecesReprogramada: { increment: 1 },
             },
           });
 

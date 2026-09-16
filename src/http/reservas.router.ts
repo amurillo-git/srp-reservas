@@ -31,6 +31,15 @@ import {
   listarExcepciones,
   listarPlantillaSemanal,
 } from "../services/horarios.service.js";
+import {
+  cancelacionesYReprogramaciones,
+  depositosPorMetodoPago,
+  ocupacionHeatsDelDia,
+  participantesPorDia,
+  reservasPorFechaYEstado,
+  reservasVencidas,
+  sinpePendientes,
+} from "../services/reportes.service.js";
 
 /** 14.7: solo Administrador y Caja validan depositos SINPE. */
 const ROLES_VALIDAN_SINPE = ["ADMINISTRADOR", "CAJA"] as const;
@@ -40,6 +49,8 @@ const ROLES_GESTIONAN_BLOQUEOS = ["ADMINISTRADOR"] as const;
 const ROLES_GESTIONAN_RESERVAS = ["ADMINISTRADOR", "ATENCION"] as const;
 /** 14.7: solo Administrador gestiona horarios. */
 const ROLES_GESTIONAN_HORARIOS = ["ADMINISTRADOR"] as const;
+/** 14.7: mismos roles que validan SINPE (administracion + manejo de dinero). */
+const ROLES_VEN_REPORTES = ["ADMINISTRADOR", "CAJA"] as const;
 const TIPOS_EXCEPCION = ["HABILITADO", "MODIFICADO", "CERRADO"] as const;
 
 const PATRON_FECHA = /^\d{4}-\d{2}-\d{2}$/;
@@ -66,6 +77,27 @@ function conManejoDeErrores(
   return (req, res, next) => {
     handler(req, res).catch(next);
   };
+}
+
+/** Valida `serviceId`, `from` y `to` (compartidos por la mayoria de los
+ * reportes, 25). Devuelve `null` y ya envio la respuesta 400 si algo falta. */
+function leerRangoFechas(req: Request, res: Response): { serviceId: string; from: string; to: string } | null {
+  const serviceId = req.query.serviceId;
+  const from = req.query.from;
+  const to = req.query.to;
+  if (typeof serviceId !== "string" || serviceId.length === 0) {
+    enviarError(res, 400, "serviceId es requerido");
+    return null;
+  }
+  if (typeof from !== "string" || !PATRON_FECHA.test(from)) {
+    enviarError(res, 400, "from debe tener el formato YYYY-MM-DD");
+    return null;
+  }
+  if (typeof to !== "string" || !PATRON_FECHA.test(to)) {
+    enviarError(res, 400, "to debe tener el formato YYYY-MM-DD");
+    return null;
+  }
+  return { serviceId, from, to };
 }
 
 export function crearRouterReservas(prisma: PrismaClient): Router {
@@ -544,6 +576,92 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
         return;
       }
       enviarError(res, 404, resultado.motivo);
+    }),
+  );
+
+  // 25, 18.3: reportes administrativos de solo lectura.
+  router.get(
+    "/admin/reports/reservations-by-date-status",
+    requireAuth(ROLES_VEN_REPORTES),
+    conManejoDeErrores(async (req, res) => {
+      const rango = leerRangoFechas(req, res);
+      if (!rango) return;
+      const reporte = await reservasPorFechaYEstado(prisma, rango.serviceId, rango.from, rango.to);
+      res.json({ reporte });
+    }),
+  );
+
+  router.get(
+    "/admin/reports/participants-by-day",
+    requireAuth(ROLES_VEN_REPORTES),
+    conManejoDeErrores(async (req, res) => {
+      const rango = leerRangoFechas(req, res);
+      if (!rango) return;
+      const reporte = await participantesPorDia(prisma, rango.serviceId, rango.from, rango.to);
+      res.json({ reporte });
+    }),
+  );
+
+  router.get(
+    "/admin/reports/occupancy",
+    requireAuth(ROLES_VEN_REPORTES),
+    conManejoDeErrores(async (req, res) => {
+      const serviceId = req.query.serviceId;
+      const date = req.query.date;
+      if (typeof serviceId !== "string" || serviceId.length === 0) {
+        return enviarError(res, 400, "serviceId es requerido");
+      }
+      if (typeof date !== "string" || !PATRON_FECHA.test(date)) {
+        return enviarError(res, 400, "date debe tener el formato YYYY-MM-DD");
+      }
+      const reporte = await ocupacionHeatsDelDia(prisma, serviceId, date);
+      res.json({ reporte });
+    }),
+  );
+
+  router.get(
+    "/admin/reports/deposits-by-payment-method",
+    requireAuth(ROLES_VEN_REPORTES),
+    conManejoDeErrores(async (req, res) => {
+      const rango = leerRangoFechas(req, res);
+      if (!rango) return;
+      const reporte = await depositosPorMetodoPago(prisma, rango.serviceId, rango.from, rango.to);
+      res.json({ reporte });
+    }),
+  );
+
+  router.get(
+    "/admin/reports/pending-sinpe",
+    requireAuth(ROLES_VEN_REPORTES),
+    conManejoDeErrores(async (req, res) => {
+      const serviceId = req.query.serviceId;
+      if (typeof serviceId !== "string" || serviceId.length === 0) {
+        return enviarError(res, 400, "serviceId es requerido");
+      }
+      const reporte = await sinpePendientes(prisma, serviceId);
+      res.json({ reporte });
+    }),
+  );
+
+  router.get(
+    "/admin/reports/expired-reservations",
+    requireAuth(ROLES_VEN_REPORTES),
+    conManejoDeErrores(async (req, res) => {
+      const rango = leerRangoFechas(req, res);
+      if (!rango) return;
+      const reporte = await reservasVencidas(prisma, rango.serviceId, rango.from, rango.to);
+      res.json({ reporte });
+    }),
+  );
+
+  router.get(
+    "/admin/reports/cancellations-and-reschedules",
+    requireAuth(ROLES_VEN_REPORTES),
+    conManejoDeErrores(async (req, res) => {
+      const rango = leerRangoFechas(req, res);
+      if (!rango) return;
+      const reporte = await cancelacionesYReprogramaciones(prisma, rango.serviceId, rango.from, rango.to);
+      res.json(reporte);
     }),
   );
 

@@ -124,6 +124,34 @@ describe("reprogramarReserva", () => {
     expect(fake.reservas.find((r) => r.id === reserva.id)!.cantidadPersonas).toBe(5);
   });
 
+  it("25.8: incrementa vecesReprogramada en cada reprogramacion exitosa", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const lote = fake.crearLote({
+      id: "lote-contador", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
+      horaInicio: "10:00", horaFinUltimoHeat: "10:15",
+      horaInicioLimpieza: "10:15", horaFinLimpieza: "10:30", cantidadHeats: 1,
+    });
+    fake.crearHeat({ id: "heat-contador", loteId: lote.id, servicioId: SERVICIO_ID, fecha: FECHA_DATE, horaInicio: "10:00", horaFin: "10:15", posicionEnLote: 1 });
+    const { reserva } = fake.crearReservaConAsignacion({
+      heatId: "heat-contador", servicioId: SERVICIO_ID, fecha: FECHA_DATE, cantidadParticipantes: 2, estado: "CONFIRMADA",
+    });
+    expect(fake.reservas.find((r) => r.id === reserva.id)!.vecesReprogramada ?? 0).toBe(0);
+
+    const primera = await reprogramarReserva(comoPrisma(fake), reserva.codigoPublico, {
+      fecha: FECHA_ISO, horaInicioCandidata: "11:00", cantidadPersonas: 2,
+    });
+    expect(primera.ok).toBe(true);
+    expect(fake.reservas.find((r) => r.id === reserva.id)!.vecesReprogramada).toBe(1);
+
+    // 13:00, no 12:00: la plantilla de horario tiene almuerzo 12:00-12:30.
+    const segunda = await reprogramarReserva(comoPrisma(fake), reserva.codigoPublico, {
+      fecha: FECHA_ISO, horaInicioCandidata: "13:00", cantidadPersonas: 2,
+    });
+    expect(segunda.ok).toBe(true);
+    expect(fake.reservas.find((r) => r.id === reserva.id)!.vecesReprogramada).toBe(2);
+  });
+
   it("14.6: reprograma hacia su propio horario cambiando solo la cantidad de personas, sin autobloquearse", async () => {
     const fake = new FakePrisma();
     crearFixtureBase(fake);

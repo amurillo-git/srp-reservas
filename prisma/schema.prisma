@@ -257,6 +257,10 @@ model Reservation {
   /// iniciar el pago con tarjeta; el webhook de ONVO la usa para encontrar
   /// la reserva sin depender del codigo publico, que ONVO no conoce.
   pagoTarjetaSesionId String?     @unique(map: "reservations_pago_tarjeta_sesion_id_key") @map("pago_tarjeta_sesion_id")
+  /// Contador incrementado por reprogramarReserva (14.6, 25.8): permite
+  /// reportar cuantas reprogramaciones hubo en un periodo sin necesitar un
+  /// historial de auditoria completo (fuera de alcance de este slice).
+  vecesReprogramada Int           @default(0) @map("veces_reprogramada")
 
   servicio      Service          @relation(fields: [servicioId], references: [id])
   asignaciones  HeatAllocation[]

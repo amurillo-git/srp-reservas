@@ -127,16 +127,19 @@ export interface FilaReserva {
   canceladaEn?: Date | null;
   expiraEn: Date | null;
   pagoTarjetaSesionId?: string | null;
+  vecesReprogramada?: number;
 }
 
 /** Forma de los argumentos que `heat.findMany` realmente recibe: de
  * availability.service.ts (`servicioId`+`fecha`, ver
- * `construirContextoDisponibilidad`) y de expiracion.service.ts (`loteId`,
- * ver `normalizarUnLote`). Todo es opcional salvo `where` porque un
- * `include`/`orderBy` ausente es un `findMany` valido (sin relaciones ni
- * orden explicito) tanto en Prisma real como aqui. */
+ * `construirContextoDisponibilidad`), de expiracion.service.ts (`loteId`,
+ * ver `normalizarUnLote`) y de reportes.service.ts (`servicioId`+rango de
+ * `fecha`, para el reporte de participantes por dia). Todo es opcional
+ * salvo `where` porque un `include`/`orderBy` ausente es un `findMany`
+ * valido (sin relaciones ni orden explicito) tanto en Prisma real como
+ * aqui. */
 interface ArgsHeatFindMany {
-  where: { servicioId?: Id; fecha?: Date; loteId?: Id };
+  where: { servicioId?: Id; fecha?: Date | { gte?: Date; lte?: Date }; loteId?: Id };
   orderBy?: { horaInicio?: "asc" | "desc"; posicionEnLote?: "asc" | "desc" };
   include?: {
     lote?: boolean;
@@ -437,12 +440,19 @@ export class FakePrisma {
      * seguir devolviendo datos con la forma vieja. */
     findMany: async (args: ArgsHeatFindMany) => {
       const { where, orderBy, include } = args;
-      let filas = this.heats.filter(
-        (h) =>
-          (where.servicioId === undefined || h.servicioId === where.servicioId) &&
-          (where.fecha === undefined || mismaFecha(h.fecha, where.fecha)) &&
-          (where.loteId === undefined || h.loteId === where.loteId),
-      );
+      let filas = this.heats.filter((h) => {
+        if (where.servicioId !== undefined && h.servicioId !== where.servicioId) return false;
+        if (where.loteId !== undefined && h.loteId !== where.loteId) return false;
+        if (where.fecha !== undefined) {
+          if (where.fecha instanceof Date) {
+            if (!mismaFecha(h.fecha, where.fecha)) return false;
+          } else {
+            if (where.fecha.gte !== undefined && h.fecha.getTime() < where.fecha.gte.getTime()) return false;
+            if (where.fecha.lte !== undefined && h.fecha.getTime() > where.fecha.lte.getTime()) return false;
+          }
+        }
+        return true;
+      });
 
       if (orderBy?.posicionEnLote !== undefined) {
         const signo = orderBy.posicionEnLote === "desc" ? -1 : 1;
@@ -605,24 +615,55 @@ export class FakePrisma {
       if (!fila) throw new Error("No encontrado (fake)");
       return fila;
     },
-    /** Filtra por `estado` y, opcionalmente, `expiraEn: { lte }` (uso de
-     * expiracion.service.ts para encontrar reservas TEMPORAL vencidas, 19.1). */
+    /** Filtra por `estado`, `servicioId`, rango de `fecha` y/o
+     * `expiraEn: { lte }` (uso de expiracion.service.ts para reservas
+     * TEMPORAL vencidas, 19.1, y de reportes.service.ts para los reportes
+     * administrativos, 25). Todos los campos de `where` son opcionales;
+     * `orderBy.fecha` ordena el resultado (uso de sinpePendientes). */
     findMany: async ({
       where,
+      orderBy,
     }: {
-      where: { estado: string; expiraEn?: { lte: Date } };
-    }) =>
-      this.reservas.filter((r) => {
-        if (r.estado !== where.estado) return false;
+      where: { estado?: string; servicioId?: Id; fecha?: { gte?: Date; lte?: Date }; expiraEn?: { lte: Date } };
+      orderBy?: { fecha?: "asc" | "desc" };
+    }) => {
+      let filas = this.reservas.filter((r) => {
+        if (where.estado !== undefined && r.estado !== where.estado) return false;
+        if (where.servicioId !== undefined && r.servicioId !== where.servicioId) return false;
+        if (where.fecha?.gte !== undefined && r.fecha.getTime() < where.fecha.gte.getTime()) return false;
+        if (where.fecha?.lte !== undefined && r.fecha.getTime() > where.fecha.lte.getTime()) return false;
         if (where.expiraEn?.lte !== undefined) {
           if (r.expiraEn === null || r.expiraEn.getTime() > where.expiraEn.lte.getTime()) return false;
         }
         return true;
-      }),
-    update: async ({ where, data }: { where: { id: Id }; data: Partial<FilaReserva> }) => {
+      });
+      if (orderBy?.fecha !== undefined) {
+        const signo = orderBy.fecha === "desc" ? -1 : 1;
+        filas = [...filas].sort((a, b) => signo * (a.fecha.getTime() - b.fecha.getTime()));
+      }
+      return filas;
+    },
+    /** `vecesReprogramada` acepta la forma `{ increment: n }` de Prisma
+     * (uso de gestion-reservas.service.ts, reprogramarReserva, 25.8) ademas
+     * de un valor directo. */
+    update: async ({
+      where,
+      data,
+    }: {
+      where: { id: Id };
+      data: Partial<Omit<FilaReserva, "vecesReprogramada">> & {
+        vecesReprogramada?: number | { increment: number };
+      };
+    }) => {
       const fila = this.reservas.find((r) => r.id === where.id);
       if (!fila) throw new Error(`Reservation ${where.id} no existe (fake)`);
-      Object.assign(fila, data);
+      const { vecesReprogramada, ...resto } = data;
+      Object.assign(fila, resto);
+      if (typeof vecesReprogramada === "number") {
+        fila.vecesReprogramada = vecesReprogramada;
+      } else if (vecesReprogramada) {
+        fila.vecesReprogramada = (fila.vecesReprogramada ?? 0) + vecesReprogramada.increment;
+      }
       return fila;
     },
     create: async ({ data }: { data: Omit<FilaReserva, "id"> }) => {
