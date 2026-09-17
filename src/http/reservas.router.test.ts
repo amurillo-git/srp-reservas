@@ -1076,3 +1076,80 @@ describe("GET /api/admin/audit-events (21)", () => {
     expect(sinPermiso.status).toBe(403);
   });
 });
+
+describe("/api/admin/users (14.7)", () => {
+  it("lista, crea y actualiza un usuario, registrando auditoria (21)", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const creacion = await request(app)
+      .post("/api/admin/users")
+      .set("Authorization", auth)
+      .send({ email: "nuevo@srp.test", password: "clave-larga-123", rol: "ATENCION" });
+    expect(creacion.status).toBe(201);
+    expect(creacion.body.user.email).toBe("nuevo@srp.test");
+    const userId = creacion.body.user.id as string;
+
+    const lista = await request(app).get("/api/admin/users").set("Authorization", auth);
+    expect(lista.status).toBe(200);
+    expect(lista.body.usuarios.map((u: { email: string }) => u.email)).toContain("nuevo@srp.test");
+
+    const actualizacion = await request(app)
+      .put(`/api/admin/users/${userId}`)
+      .set("Authorization", auth)
+      .send({ rol: "CAJA", activo: false });
+    expect(actualizacion.status).toBe(200);
+    expect(actualizacion.body.user).toMatchObject({ rol: "CAJA", activo: false });
+
+    expect(fake.eventosAuditoria.map((e) => e.accion)).toEqual(["USUARIO_CREADO", "USUARIO_ACTUALIZADO"]);
+  });
+
+  it("valida el cuerpo al crear (400) y rechaza un correo duplicado (409)", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const sinRol = await request(app)
+      .post("/api/admin/users")
+      .set("Authorization", auth)
+      .send({ email: "a@srp.test", password: "clave-larga-123" });
+    expect(sinRol.status).toBe(400);
+
+    await request(app)
+      .post("/api/admin/users")
+      .set("Authorization", auth)
+      .send({ email: "duplicado@srp.test", password: "clave-larga-123", rol: "ATENCION" });
+    const duplicado = await request(app)
+      .post("/api/admin/users")
+      .set("Authorization", auth)
+      .send({ email: "duplicado@srp.test", password: "otra-clave-123", rol: "CAJA" });
+    expect(duplicado.status).toBe(409);
+  });
+
+  it("impide que un administrador se modifique a si mismo (403)", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake); // crea al usuario "admin-ADMINISTRADOR"
+
+    const respuesta = await request(app)
+      .put("/api/admin/users/admin-ADMINISTRADOR")
+      .set("Authorization", auth)
+      .send({ activo: false });
+
+    expect(respuesta.status).toBe(403);
+    expect(fake.usuarios.find((u) => u.id === "admin-ADMINISTRADOR")!.activo).toBe(true);
+  });
+
+  it("rechaza sin token (401) y con un rol distinto de ADMINISTRADOR (403)", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+
+    const sinToken = await request(app).get("/api/admin/users");
+    expect(sinToken.status).toBe(401);
+
+    const authSinPermiso = await tokenAdminDePrueba(fake, "ATENCION");
+    const sinPermiso = await request(app).get("/api/admin/users").set("Authorization", authSinPermiso);
+    expect(sinPermiso.status).toBe(403);
+  });
+});

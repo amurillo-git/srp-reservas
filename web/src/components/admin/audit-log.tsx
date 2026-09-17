@@ -20,6 +20,8 @@ const ACCIONES = [
   { valor: "EXCEPCION_HORARIO_ELIMINADA", etiqueta: "Excepción de horario eliminada" },
   { valor: "BLOQUEO_CREADO", etiqueta: "Bloqueo creado" },
   { valor: "BLOQUEO_ELIMINADO", etiqueta: "Bloqueo eliminado" },
+  { valor: "USUARIO_CREADO", etiqueta: "Usuario creado" },
+  { valor: "USUARIO_ACTUALIZADO", etiqueta: "Usuario actualizado" },
 ] as const;
 
 function formatoValores(valores: unknown): string {

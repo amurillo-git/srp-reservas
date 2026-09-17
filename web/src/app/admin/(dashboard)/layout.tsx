@@ -13,6 +13,7 @@ const ENLACES = [
   { href: "/admin/reservations", etiqueta: "Gestión de reservas" },
   { href: "/admin/calendar", etiqueta: "Calendario operativo" },
   { href: "/admin/schedule", etiqueta: "Horarios y bloqueos" },
+  { href: "/admin/users", etiqueta: "Usuarios y permisos" },
   { href: "/admin/audit", etiqueta: "Auditoría" },
 ] as const;
 

@@ -382,3 +382,55 @@ export async function obtenerEventosAuditoria(
   );
   return eventos;
 }
+
+// ----------------------------------------------------------------------------
+// Usuarios y permisos (14.7).
+// ----------------------------------------------------------------------------
+
+export type RolUsuario = "ADMINISTRADOR" | "ATENCION" | "CAJA" | "OPERACION";
+
+export interface UsuarioAdmin {
+  readonly id: string;
+  readonly email: string;
+  readonly rol: RolUsuario;
+  readonly activo: boolean;
+  readonly creadoEn: string;
+}
+
+export async function listarUsuariosAdmin(token: string): Promise<readonly UsuarioAdmin[]> {
+  const { usuarios } = await obtenerJsonAdmin<{ usuarios: UsuarioAdmin[] }>("/admin/users", token);
+  return usuarios;
+}
+
+export type ResultadoUsuario =
+  | { readonly ok: true; readonly usuario: UsuarioAdmin }
+  | { readonly ok: false; readonly motivo: string };
+
+export async function crearUsuarioAdmin(
+  token: string,
+  datos: { email: string; password: string; rol: RolUsuario },
+): Promise<ResultadoUsuario> {
+  const { status, datos: cuerpo } = await enviarJsonAdmin<{ user?: UsuarioAdmin; motivo?: string; error?: string }>(
+    "POST",
+    "/admin/users",
+    token,
+    datos,
+  );
+  if (status === 201 && cuerpo.user) return { ok: true, usuario: cuerpo.user };
+  return { ok: false, motivo: cuerpo.motivo ?? cuerpo.error ?? "No se pudo crear el usuario" };
+}
+
+export async function actualizarUsuarioAdmin(
+  token: string,
+  id: string,
+  datos: { rol?: RolUsuario; activo?: boolean },
+): Promise<ResultadoUsuario> {
+  const { status, datos: cuerpo } = await enviarJsonAdmin<{ user?: UsuarioAdmin; motivo?: string; error?: string }>(
+    "PUT",
+    `/admin/users/${id}`,
+    token,
+    datos,
+  );
+  if (status === 200 && cuerpo.user) return { ok: true, usuario: cuerpo.user };
+  return { ok: false, motivo: cuerpo.motivo ?? cuerpo.error ?? "No se pudo actualizar el usuario" };
+}

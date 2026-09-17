@@ -9,7 +9,7 @@
 // ============================================================================
 
 import { Router, type NextFunction, type Request, type Response } from "express";
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient, Rol } from "@prisma/client";
 import {
   confirmarReserva,
   consultarDisponibilidad,
@@ -23,6 +23,7 @@ import { crearSesionPago, procesarWebhookOnvo } from "../services/pago-tarjeta.s
 import { iniciarSesion } from "../services/auth.service.js";
 import { requireAuth, type RequestAutenticado } from "./auth.middleware.js";
 import { listarEventos, registrarEvento, type ActorAuditoria } from "../services/auditoria.service.js";
+import { actualizarUsuario, crearUsuario, listarUsuarios } from "../services/usuarios.service.js";
 import { crearBloqueo, eliminarBloqueo, listarBloqueos } from "../services/bloqueos.service.js";
 import { cancelarReserva, reprogramarReserva } from "../services/gestion-reservas.service.js";
 import { calendarioOperativoDelDia } from "../services/calendario-operativo.service.js";
@@ -61,6 +62,9 @@ const ROLES_VEN_REPORTES = ["ADMINISTRADOR", "CAJA"] as const;
 const ROLES_VEN_CALENDARIO = ["ADMINISTRADOR", "OPERACION"] as const;
 /** 21: la auditoria es informacion sensible de accountability, solo Administrador. */
 const ROLES_VEN_AUDITORIA = ["ADMINISTRADOR"] as const;
+/** 14.7: "Administrador | ...usuarios..." — solo Administrador gestiona usuarios. */
+const ROLES_GESTIONAN_USUARIOS = ["ADMINISTRADOR"] as const;
+const ROLES_USUARIO = ["ADMINISTRADOR", "ATENCION", "CAJA", "OPERACION"] as const;
 const TIPOS_EXCEPCION = ["HABILITADO", "MODIFICADO", "CERRADO"] as const;
 const ESTADOS_RESERVA = [
   "TEMPORAL", "PENDIENTE_VALIDACION_SINPE", "CONFIRMADA", "RECHAZADA", "CANCELADA", "EXPIRADA",
@@ -817,6 +821,79 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
         hasta: to as string | undefined,
       });
       res.json({ eventos });
+    }),
+  );
+
+  // 14.7: gestion de usuarios administrativos. Solo ADMINISTRADOR. Sin
+  // recuperacion/cambio de contrasena en este slice (pendiente, ver
+  // usuarios.service.ts).
+  router.get(
+    "/admin/users",
+    requireAuth(ROLES_GESTIONAN_USUARIOS),
+    conManejoDeErrores(async (_req, res) => {
+      const usuarios = await listarUsuarios(prisma);
+      res.json({ usuarios });
+    }),
+  );
+
+  router.post(
+    "/admin/users",
+    requireAuth(ROLES_GESTIONAN_USUARIOS),
+    conManejoDeErrores(async (req, res) => {
+      const { email, password, rol } = req.body ?? {};
+
+      if (typeof email !== "string" || email.trim().length === 0) {
+        return enviarError(res, 400, "email es requerido");
+      }
+      if (typeof password !== "string") {
+        return enviarError(res, 400, "password es requerido");
+      }
+      if (typeof rol !== "string" || !ROLES_USUARIO.includes(rol as (typeof ROLES_USUARIO)[number])) {
+        return enviarError(res, 400, `rol debe ser uno de: ${ROLES_USUARIO.join(", ")}`);
+      }
+
+      const resultado = await crearUsuario(prisma, { email, password, rol: rol as Rol });
+      if (resultado.ok) {
+        await registrarEvento(prisma, actorDesde(req), {
+          accion: "USUARIO_CREADO", objetoTipo: "USUARIO", objetoId: resultado.usuario.id,
+          valoresNuevos: { email, rol },
+        });
+        res.status(201).json({ user: resultado.usuario });
+        return;
+      }
+      const status = resultado.motivo === "EMAIL_YA_EXISTE" ? 409 : 400;
+      enviarError(res, status, resultado.motivo);
+    }),
+  );
+
+  router.put(
+    "/admin/users/:id",
+    requireAuth(ROLES_GESTIONAN_USUARIOS),
+    conManejoDeErrores(async (req, res) => {
+      const { rol, activo } = req.body ?? {};
+
+      if (rol === undefined && activo === undefined) {
+        return enviarError(res, 400, "rol y/o activo son requeridos");
+      }
+      if (rol !== undefined && (typeof rol !== "string" || !ROLES_USUARIO.includes(rol as (typeof ROLES_USUARIO)[number]))) {
+        return enviarError(res, 400, `rol debe ser uno de: ${ROLES_USUARIO.join(", ")}`);
+      }
+      if (activo !== undefined && typeof activo !== "boolean") {
+        return enviarError(res, 400, "activo debe ser booleano");
+      }
+
+      const actor = actorDesde(req);
+      const resultado = await actualizarUsuario(prisma, actor.userId, req.params.id!, { rol: rol as Rol | undefined, activo });
+      if (resultado.ok) {
+        await registrarEvento(prisma, actor, {
+          accion: "USUARIO_ACTUALIZADO", objetoTipo: "USUARIO", objetoId: req.params.id!,
+          valoresNuevos: { rol, activo },
+        });
+        res.status(200).json({ user: resultado.usuario });
+        return;
+      }
+      const status = resultado.motivo === "NO_ENCONTRADO" ? 404 : 403;
+      enviarError(res, status, resultado.motivo);
     }),
   );
 

@@ -31,6 +31,7 @@ export interface FilaUsuario {
   passwordHash: string;
   rol: string;
   activo: boolean;
+  creadoEn: Date;
 }
 
 export interface FilaEventoAuditoria {
@@ -720,12 +721,28 @@ export class FakePrisma {
   };
 
   readonly user = {
-    findUnique: async ({ where }: { where: { email: string } }) =>
-      this.usuarios.find((u) => u.email === where.email) ?? null,
+    findUnique: async ({ where }: { where: { email?: string; id?: Id } }) =>
+      this.usuarios.find(
+        (u) => (where.email !== undefined && u.email === where.email) || (where.id !== undefined && u.id === where.id),
+      ) ?? null,
     findFirst: async () => this.usuarios[0] ?? null,
-    create: async ({ data }: { data: Omit<FilaUsuario, "id" | "rol" | "activo"> & { rol?: string; activo?: boolean } }) => {
-      const fila: FilaUsuario = { id: nuevoId("user"), rol: "ATENCION", activo: true, ...data };
+    findMany: async ({ orderBy }: { orderBy?: { creadoEn?: "asc" | "desc" } } = {}) => {
+      const signo = orderBy?.creadoEn === "desc" ? -1 : 1;
+      return [...this.usuarios].sort((a, b) => signo * (a.creadoEn.getTime() - b.creadoEn.getTime()));
+    },
+    create: async ({
+      data,
+    }: {
+      data: Omit<FilaUsuario, "id" | "rol" | "activo" | "creadoEn"> & { rol?: string; activo?: boolean };
+    }) => {
+      const fila: FilaUsuario = { id: nuevoId("user"), rol: "ATENCION", activo: true, creadoEn: new Date(), ...data };
       this.usuarios.push(fila);
+      return fila;
+    },
+    update: async ({ where, data }: { where: { id: Id }; data: Partial<Pick<FilaUsuario, "rol" | "activo">> }) => {
+      const fila = this.usuarios.find((u) => u.id === where.id);
+      if (!fila) throw new Error(`Usuario ${where.id} no existe (fake)`);
+      Object.assign(fila, data);
       return fila;
     },
   };
@@ -768,8 +785,10 @@ export class FakePrisma {
   /** Fixture: agrega un usuario ya creado (sin pasar por `hashearContrasena`
    * real de auth.service.ts, para pruebas que solo necesitan un login exitoso
    * con un hash predecible). */
-  crearUsuario(datos: { id: Id; email: string; passwordHash: string } & Partial<Pick<FilaUsuario, "rol" | "activo">>): FilaUsuario {
-    const fila: FilaUsuario = { rol: "ATENCION", activo: true, ...datos };
+  crearUsuario(
+    datos: { id: Id; email: string; passwordHash: string } & Partial<Pick<FilaUsuario, "rol" | "activo" | "creadoEn">>,
+  ): FilaUsuario {
+    const fila: FilaUsuario = { rol: "ATENCION", activo: true, creadoEn: new Date(), ...datos };
     this.usuarios.push(fila);
     return fila;
   }
