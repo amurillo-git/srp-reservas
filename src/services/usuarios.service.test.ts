@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { PrismaClient } from "@prisma/client";
-import { actualizarUsuario, crearUsuario, listarUsuarios } from "./usuarios.service.js";
+import {
+  actualizarUsuario,
+  cambiarContrasenaPropia,
+  crearUsuario,
+  listarUsuarios,
+  restablecerContrasena,
+} from "./usuarios.service.js";
+import { hashearContrasena } from "./auth.service.js";
 import { FakePrisma } from "./testing/fake-prisma.js";
 
 // Pruebas de usuarios.service.ts (14.7): gestion de usuarios administrativos
@@ -84,5 +91,74 @@ describe("actualizarUsuario", () => {
 
     expect(resultado).toEqual({ ok: false, motivo: "NO_PUEDE_MODIFICARSE_A_SI_MISMO" });
     expect(fake.usuarios[0]!.activo).toBe(true); // no se toco
+  });
+});
+
+describe("cambiarContrasenaPropia", () => {
+  it("cambia la contrasena si la actual es correcta", async () => {
+    const fake = new FakePrisma();
+    fake.crearUsuario({ id: "u1", email: "a@srp.test", passwordHash: await hashearContrasena("clave-actual-123") });
+
+    const resultado = await cambiarContrasenaPropia(comoPrisma(fake), "u1", "clave-actual-123", "clave-nueva-456");
+
+    expect(resultado).toEqual({ ok: true });
+    expect(fake.usuarios[0]!.passwordHash).not.toBe("clave-nueva-456"); // esta hasheada
+  });
+
+  it("rechaza si la contrasena actual no coincide", async () => {
+    const fake = new FakePrisma();
+    fake.crearUsuario({ id: "u1", email: "a@srp.test", passwordHash: await hashearContrasena("clave-actual-123") });
+
+    const resultado = await cambiarContrasenaPropia(comoPrisma(fake), "u1", "clave-incorrecta", "clave-nueva-456");
+
+    expect(resultado).toEqual({ ok: false, motivo: "CONTRASENA_ACTUAL_INCORRECTA" });
+  });
+
+  it("rechaza una contrasena nueva demasiado corta", async () => {
+    const fake = new FakePrisma();
+    fake.crearUsuario({ id: "u1", email: "a@srp.test", passwordHash: await hashearContrasena("clave-actual-123") });
+
+    const resultado = await cambiarContrasenaPropia(comoPrisma(fake), "u1", "clave-actual-123", "corta");
+
+    expect(resultado).toEqual({ ok: false, motivo: "CONTRASENA_DEBIL" });
+  });
+
+  it("devuelve NO_ENCONTRADO si el usuario no existe", async () => {
+    const fake = new FakePrisma();
+
+    const resultado = await cambiarContrasenaPropia(comoPrisma(fake), "no-existe", "cualquiera", "clave-nueva-456");
+
+    expect(resultado).toEqual({ ok: false, motivo: "NO_ENCONTRADO" });
+  });
+});
+
+describe("restablecerContrasena", () => {
+  it("cambia la contrasena de otro usuario sin pedir la actual", async () => {
+    const fake = new FakePrisma();
+    fake.crearUsuario({ id: "u1", email: "a@srp.test", passwordHash: "hash-viejo" });
+
+    const resultado = await restablecerContrasena(comoPrisma(fake), "u1", "clave-nueva-456");
+
+    expect(resultado).toEqual({ ok: true });
+    expect(fake.usuarios[0]!.passwordHash).not.toBe("hash-viejo");
+    expect(fake.usuarios[0]!.passwordHash).not.toBe("clave-nueva-456"); // esta hasheada
+  });
+
+  it("rechaza una contrasena nueva demasiado corta", async () => {
+    const fake = new FakePrisma();
+    fake.crearUsuario({ id: "u1", email: "a@srp.test", passwordHash: "hash-viejo" });
+
+    const resultado = await restablecerContrasena(comoPrisma(fake), "u1", "corta");
+
+    expect(resultado).toEqual({ ok: false, motivo: "CONTRASENA_DEBIL" });
+    expect(fake.usuarios[0]!.passwordHash).toBe("hash-viejo");
+  });
+
+  it("devuelve NO_ENCONTRADO si el usuario no existe", async () => {
+    const fake = new FakePrisma();
+
+    const resultado = await restablecerContrasena(comoPrisma(fake), "no-existe", "clave-nueva-456");
+
+    expect(resultado).toEqual({ ok: false, motivo: "NO_ENCONTRADO" });
   });
 });

@@ -739,7 +739,13 @@ export class FakePrisma {
       this.usuarios.push(fila);
       return fila;
     },
-    update: async ({ where, data }: { where: { id: Id }; data: Partial<Pick<FilaUsuario, "rol" | "activo">> }) => {
+    update: async ({
+      where,
+      data,
+    }: {
+      where: { id: Id };
+      data: Partial<Pick<FilaUsuario, "rol" | "activo" | "passwordHash">>;
+    }) => {
       const fila = this.usuarios.find((u) => u.id === where.id);
       if (!fila) throw new Error(`Usuario ${where.id} no existe (fake)`);
       Object.assign(fila, data);

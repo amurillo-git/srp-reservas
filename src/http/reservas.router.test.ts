@@ -1152,4 +1152,49 @@ describe("/api/admin/users (14.7)", () => {
     const sinPermiso = await request(app).get("/api/admin/users").set("Authorization", authSinPermiso);
     expect(sinPermiso.status).toBe(403);
   });
+
+  it("PUT /admin/me/password: cambia la propia contrasena (cualquier rol) y registra auditoria", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake, "ATENCION"); // password fixture: "clave-admin"
+
+    const incorrecta = await request(app)
+      .put("/api/admin/me/password")
+      .set("Authorization", auth)
+      .send({ currentPassword: "no-es-esta", newPassword: "clave-nueva-123" });
+    expect(incorrecta.status).toBe(401);
+
+    const correcta = await request(app)
+      .put("/api/admin/me/password")
+      .set("Authorization", auth)
+      .send({ currentPassword: "clave-admin", newPassword: "clave-nueva-123" });
+    expect(correcta.status).toBe(200);
+    expect(fake.eventosAuditoria.map((e) => e.accion)).toEqual(["USUARIO_CONTRASENA_CAMBIADA"]);
+  });
+
+  it("PUT /admin/users/:id/password: un Administrador restablece la contrasena de otro usuario sin la actual", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+    const creacion = await request(app)
+      .post("/api/admin/users")
+      .set("Authorization", auth)
+      .send({ email: "otro@srp.test", password: "clave-larga-123", rol: "ATENCION" });
+    const otroId = creacion.body.user.id as string;
+
+    const respuesta = await request(app)
+      .put(`/api/admin/users/${otroId}/password`)
+      .set("Authorization", auth)
+      .send({ newPassword: "clave-nueva-123" });
+
+    expect(respuesta.status).toBe(200);
+    expect(fake.eventosAuditoria.map((e) => e.accion)).toEqual(["USUARIO_CREADO", "USUARIO_CONTRASENA_RESETEADA"]);
+
+    const authSinPermiso = await tokenAdminDePrueba(fake, "ATENCION");
+    const sinPermiso = await request(app)
+      .put(`/api/admin/users/${otroId}/password`)
+      .set("Authorization", authSinPermiso)
+      .send({ newPassword: "otra-clave-123" });
+    expect(sinPermiso.status).toBe(403);
+  });
 });

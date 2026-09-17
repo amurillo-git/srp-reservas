@@ -23,7 +23,13 @@ import { crearSesionPago, procesarWebhookOnvo } from "../services/pago-tarjeta.s
 import { iniciarSesion } from "../services/auth.service.js";
 import { requireAuth, type RequestAutenticado } from "./auth.middleware.js";
 import { listarEventos, registrarEvento, type ActorAuditoria } from "../services/auditoria.service.js";
-import { actualizarUsuario, crearUsuario, listarUsuarios } from "../services/usuarios.service.js";
+import {
+  actualizarUsuario,
+  cambiarContrasenaPropia,
+  crearUsuario,
+  listarUsuarios,
+  restablecerContrasena,
+} from "../services/usuarios.service.js";
 import { crearBloqueo, eliminarBloqueo, listarBloqueos } from "../services/bloqueos.service.js";
 import { cancelarReserva, reprogramarReserva } from "../services/gestion-reservas.service.js";
 import { calendarioOperativoDelDia } from "../services/calendario-operativo.service.js";
@@ -893,6 +899,60 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
         return;
       }
       const status = resultado.motivo === "NO_ENCONTRADO" ? 404 : 403;
+      enviarError(res, status, resultado.motivo);
+    }),
+  );
+
+  // Cambio de contrasena por el propio usuario (cualquier rol autenticado):
+  // requiere conocer la actual.
+  router.put(
+    "/admin/me/password",
+    requireAuth(),
+    conManejoDeErrores(async (req, res) => {
+      const { currentPassword, newPassword } = req.body ?? {};
+      if (typeof currentPassword !== "string" || currentPassword.length === 0) {
+        return enviarError(res, 400, "currentPassword es requerido");
+      }
+      if (typeof newPassword !== "string") {
+        return enviarError(res, 400, "newPassword es requerido");
+      }
+
+      const actor = actorDesde(req);
+      const resultado = await cambiarContrasenaPropia(prisma, actor.userId, currentPassword, newPassword);
+      if (resultado.ok) {
+        await registrarEvento(prisma, actor, {
+          accion: "USUARIO_CONTRASENA_CAMBIADA", objetoTipo: "USUARIO", objetoId: actor.userId,
+        });
+        res.status(200).json({ ok: true });
+        return;
+      }
+      const status =
+        resultado.motivo === "NO_ENCONTRADO" ? 404 : resultado.motivo === "CONTRASENA_ACTUAL_INCORRECTA" ? 401 : 400;
+      enviarError(res, status, resultado.motivo);
+    }),
+  );
+
+  // "Recuperacion" de contrasena (14.7, sin proveedor de notificaciones
+  // todavia, ver usuarios.service.ts): solo ADMINISTRADOR, sin pedir la
+  // actual — se comunica la nueva fuera del sistema.
+  router.put(
+    "/admin/users/:id/password",
+    requireAuth(ROLES_GESTIONAN_USUARIOS),
+    conManejoDeErrores(async (req, res) => {
+      const { newPassword } = req.body ?? {};
+      if (typeof newPassword !== "string") {
+        return enviarError(res, 400, "newPassword es requerido");
+      }
+
+      const resultado = await restablecerContrasena(prisma, req.params.id!, newPassword);
+      if (resultado.ok) {
+        await registrarEvento(prisma, actorDesde(req), {
+          accion: "USUARIO_CONTRASENA_RESETEADA", objetoTipo: "USUARIO", objetoId: req.params.id!,
+        });
+        res.status(200).json({ ok: true });
+        return;
+      }
+      const status = resultado.motivo === "NO_ENCONTRADO" ? 404 : 400;
       enviarError(res, status, resultado.motivo);
     }),
   );

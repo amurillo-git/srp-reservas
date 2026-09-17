@@ -1,14 +1,16 @@
 // ============================================================================
-// Gestion de usuarios administrativos (14.7).
+// Gestion de usuarios administrativos (14.7) + cambio/recuperacion de
+// contrasena.
 //
-// Reutiliza hashearContrasena de auth.service.ts (no reimplementa el
-// hashing). Fuera de alcance de este slice (pendiente para mas adelante):
-// recuperacion/cambio de contrasena — hoy no existe esa funcion en ningun
-// lado del sistema (schema.prisma lo documenta explicitamente sobre User).
+// Reutiliza hashearContrasena/verificarContrasena de auth.service.ts (no
+// reimplementa el hashing). Sin proveedor de notificaciones (seccion 15)
+// todavia, un "olvide mi contrasena" por correo/SMS no es viable: en su
+// lugar, un Administrador puede restablecer la contrasena de otro usuario
+// directamente (restablecerContrasena) y comunicarsela fuera del sistema.
 // ============================================================================
 
 import type { PrismaClient, Rol } from "@prisma/client";
-import { hashearContrasena } from "./auth.service.js";
+import { hashearContrasena, verificarContrasena } from "./auth.service.js";
 
 const LONGITUD_MINIMA_CONTRASENA = 8;
 
@@ -84,4 +86,60 @@ export async function actualizarUsuario(
   }
   const usuario = await prisma.user.update({ where: { id }, data: { rol: datos.rol, activo: datos.activo } });
   return { ok: true, usuario: comoUsuarioAdmin(usuario) };
+}
+
+export type ResultadoCambiarContrasena =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly motivo: "NO_ENCONTRADO" }
+  | { readonly ok: false; readonly motivo: "CONTRASENA_ACTUAL_INCORRECTA" }
+  | { readonly ok: false; readonly motivo: "CONTRASENA_DEBIL" };
+
+/** Cambio de contrasena por el propio usuario (requiere conocer la actual). */
+export async function cambiarContrasenaPropia(
+  prisma: PrismaClient,
+  userId: string,
+  contrasenaActual: string,
+  contrasenaNueva: string,
+): Promise<ResultadoCambiarContrasena> {
+  if (contrasenaNueva.length < LONGITUD_MINIMA_CONTRASENA) {
+    return { ok: false, motivo: "CONTRASENA_DEBIL" };
+  }
+  const usuario = await prisma.user.findUnique({ where: { id: userId } });
+  if (!usuario) {
+    return { ok: false, motivo: "NO_ENCONTRADO" };
+  }
+  const valida = await verificarContrasena(contrasenaActual, usuario.passwordHash);
+  if (!valida) {
+    return { ok: false, motivo: "CONTRASENA_ACTUAL_INCORRECTA" };
+  }
+  const passwordHash = await hashearContrasena(contrasenaNueva);
+  await prisma.user.update({ where: { id: userId }, data: { passwordHash } });
+  return { ok: true };
+}
+
+export type ResultadoRestablecerContrasena =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly motivo: "NO_ENCONTRADO" }
+  | { readonly ok: false; readonly motivo: "CONTRASENA_DEBIL" };
+
+/**
+ * "Recuperacion" de contrasena (14.7, sin proveedor de notificaciones
+ * todavia): un Administrador le asigna una contrasena nueva a otro usuario
+ * sin necesitar la actual, para comunicarsela fuera del sistema.
+ */
+export async function restablecerContrasena(
+  prisma: PrismaClient,
+  id: string,
+  contrasenaNueva: string,
+): Promise<ResultadoRestablecerContrasena> {
+  if (contrasenaNueva.length < LONGITUD_MINIMA_CONTRASENA) {
+    return { ok: false, motivo: "CONTRASENA_DEBIL" };
+  }
+  const usuario = await prisma.user.findUnique({ where: { id } });
+  if (!usuario) {
+    return { ok: false, motivo: "NO_ENCONTRADO" };
+  }
+  const passwordHash = await hashearContrasena(contrasenaNueva);
+  await prisma.user.update({ where: { id }, data: { passwordHash } });
+  return { ok: true };
 }

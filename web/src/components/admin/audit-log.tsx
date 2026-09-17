@@ -22,6 +22,8 @@ const ACCIONES = [
   { valor: "BLOQUEO_ELIMINADO", etiqueta: "Bloqueo eliminado" },
   { valor: "USUARIO_CREADO", etiqueta: "Usuario creado" },
   { valor: "USUARIO_ACTUALIZADO", etiqueta: "Usuario actualizado" },
+  { valor: "USUARIO_CONTRASENA_CAMBIADA", etiqueta: "Contraseña cambiada" },
+  { valor: "USUARIO_CONTRASENA_RESETEADA", etiqueta: "Contraseña restablecida" },
 ] as const;
 
 function formatoValores(valores: unknown): string {

@@ -434,3 +434,36 @@ export async function actualizarUsuarioAdmin(
   if (status === 200 && cuerpo.user) return { ok: true, usuario: cuerpo.user };
   return { ok: false, motivo: cuerpo.motivo ?? cuerpo.error ?? "No se pudo actualizar el usuario" };
 }
+
+export type ResultadoAccionSimple = { readonly ok: true } | { readonly ok: false; readonly motivo: string };
+
+/** Cambia la propia contrasena (cualquier rol, requiere la actual). */
+export async function cambiarMiContrasenaAdmin(
+  token: string,
+  datos: { currentPassword: string; newPassword: string },
+): Promise<ResultadoAccionSimple> {
+  const { status, datos: cuerpo } = await enviarJsonAdmin<{ motivo?: string; error?: string }>(
+    "PUT",
+    "/admin/me/password",
+    token,
+    datos,
+  );
+  if (status === 200) return { ok: true };
+  return { ok: false, motivo: cuerpo.motivo ?? cuerpo.error ?? "No se pudo cambiar la contraseña" };
+}
+
+/** "Recuperacion" (solo Administrador): restablece la contrasena de otro usuario sin pedir la actual. */
+export async function restablecerContrasenaAdmin(
+  token: string,
+  id: string,
+  newPassword: string,
+): Promise<ResultadoAccionSimple> {
+  const { status, datos: cuerpo } = await enviarJsonAdmin<{ motivo?: string; error?: string }>(
+    "PUT",
+    `/admin/users/${id}/password`,
+    token,
+    { newPassword },
+  );
+  if (status === 200) return { ok: true };
+  return { ok: false, motivo: cuerpo.motivo ?? cuerpo.error ?? "No se pudo restablecer la contraseña" };
+}

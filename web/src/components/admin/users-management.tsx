@@ -10,8 +10,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   actualizarUsuarioAdmin,
+  cambiarMiContrasenaAdmin,
   crearUsuarioAdmin,
   listarUsuariosAdmin,
+  restablecerContrasenaAdmin,
   type RolUsuario,
   type UsuarioAdmin,
 } from "@/lib/admin-api";
@@ -29,6 +31,7 @@ const MOTIVOS: Record<string, string> = {
   CONTRASENA_DEBIL: "La contraseña debe tener al menos 8 caracteres.",
   NO_ENCONTRADO: "No se encontró ese usuario.",
   NO_PUEDE_MODIFICARSE_A_SI_MISMO: "No podés modificar tu propio usuario desde aquí.",
+  CONTRASENA_ACTUAL_INCORRECTA: "La contraseña actual no es correcta.",
 };
 
 function textoMotivo(motivo: string): string {
@@ -47,11 +50,20 @@ interface FormularioNuevo {
 
 const FORMULARIO_VACIO: FormularioNuevo = { email: "", password: "", rol: "ATENCION" };
 
+interface FormularioContrasena {
+  currentPassword: string;
+  newPassword: string;
+}
+
+const FORMULARIO_CONTRASENA_VACIO: FormularioContrasena = { currentPassword: "", newPassword: "" };
+
 export function UsersManagement({ token, propioUserId }: { token: string; propioUserId: string | null }) {
   const [usuarios, setUsuarios] = useState<readonly UsuarioAdmin[] | null>(null);
   const [formulario, setFormulario] = useState<FormularioNuevo>(FORMULARIO_VACIO);
   const [creando, setCreando] = useState(false);
   const [procesando, setProcesando] = useState<string | null>(null);
+  const [contrasenaAbierta, setContrasenaAbierta] = useState<string | null>(null);
+  const [formularioContrasena, setFormularioContrasena] = useState<FormularioContrasena>(FORMULARIO_CONTRASENA_VACIO);
 
   useEffect(() => {
     listarUsuariosAdmin(token).then(setUsuarios);
@@ -97,6 +109,48 @@ export function UsersManagement({ token, propioUserId }: { token: string; propio
     setUsuarios((actual) => actual?.map((u) => (u.id === usuario.id ? resultado.usuario : u)) ?? null);
   }
 
+  function abrirContrasena(id: string) {
+    setContrasenaAbierta(id);
+    setFormularioContrasena(FORMULARIO_CONTRASENA_VACIO);
+  }
+
+  async function confirmarContrasena(usuario: UsuarioAdmin) {
+    const esUnoMismo = usuario.id === propioUserId;
+    if (esUnoMismo) {
+      if (!formularioContrasena.currentPassword || !formularioContrasena.newPassword) {
+        toast.error("Completá la contraseña actual y la nueva.");
+        return;
+      }
+      setProcesando(usuario.id);
+      const resultado = await cambiarMiContrasenaAdmin(token, {
+        currentPassword: formularioContrasena.currentPassword,
+        newPassword: formularioContrasena.newPassword,
+      });
+      setProcesando(null);
+      if (!resultado.ok) {
+        toast.error(textoMotivo(resultado.motivo));
+        return;
+      }
+      toast.success("Contraseña actualizada.");
+      setContrasenaAbierta(null);
+      return;
+    }
+
+    if (!formularioContrasena.newPassword) {
+      toast.error("Completá la nueva contraseña.");
+      return;
+    }
+    setProcesando(usuario.id);
+    const resultado = await restablecerContrasenaAdmin(token, usuario.id, formularioContrasena.newPassword);
+    setProcesando(null);
+    if (!resultado.ok) {
+      toast.error(textoMotivo(resultado.motivo));
+      return;
+    }
+    toast.success("Contraseña restablecida.");
+    setContrasenaAbierta(null);
+  }
+
   return (
     <Card className="border-none shadow-sm">
       <CardHeader>
@@ -111,38 +165,84 @@ export function UsersManagement({ token, propioUserId }: { token: string; propio
           {usuarios === null && <p className="text-sm text-muted-foreground">Cargando...</p>}
           {usuarios?.map((u) => {
             const esUnoMismo = u.id === propioUserId;
+            const contrasenaEstaAbierta = contrasenaAbierta === u.id;
             return (
-              <div key={u.id} className="flex flex-col gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm sm:flex-row sm:items-center sm:justify-between">
-                <div className="min-w-0">
-                  <p className="truncate font-medium">{u.email}</p>
-                  <p className="text-xs text-muted-foreground">
-                    Creado el {formatoFecha(u.creadoEn)}
-                    {esUnoMismo ? " · vos" : ""}
-                  </p>
+              <div key={u.id} className="flex flex-col gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">{u.email}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Creado el {formatoFecha(u.creadoEn)}
+                      {esUnoMismo ? " · vos" : ""}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+                      value={u.rol}
+                      disabled={esUnoMismo || procesando === u.id}
+                      onChange={(e) => cambiarRol(u.id, e.target.value as RolUsuario)}
+                    >
+                      {ROLES.map((r) => (
+                        <option key={r.valor} value={r.valor}>
+                          {r.etiqueta}
+                        </option>
+                      ))}
+                    </select>
+                    <Badge variant={u.activo ? "default" : "destructive"}>{u.activo ? "Activo" : "Inactivo"}</Badge>
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      disabled={esUnoMismo || procesando === u.id}
+                      onClick={() => alternarActivo(u)}
+                    >
+                      {u.activo ? "Desactivar" : "Activar"}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      disabled={procesando === u.id}
+                      onClick={() => (contrasenaEstaAbierta ? setContrasenaAbierta(null) : abrirContrasena(u.id))}
+                    >
+                      {esUnoMismo ? "Cambiar contraseña" : "Restablecer contraseña"}
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <select
-                    className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
-                    value={u.rol}
-                    disabled={esUnoMismo || procesando === u.id}
-                    onChange={(e) => cambiarRol(u.id, e.target.value as RolUsuario)}
-                  >
-                    {ROLES.map((r) => (
-                      <option key={r.valor} value={r.valor}>
-                        {r.etiqueta}
-                      </option>
-                    ))}
-                  </select>
-                  <Badge variant={u.activo ? "default" : "destructive"}>{u.activo ? "Activo" : "Inactivo"}</Badge>
-                  <Button
-                    variant="outline"
-                    size="xs"
-                    disabled={esUnoMismo || procesando === u.id}
-                    onClick={() => alternarActivo(u)}
-                  >
-                    {u.activo ? "Desactivar" : "Activar"}
-                  </Button>
-                </div>
+
+                {contrasenaEstaAbierta && (
+                  <div className="flex flex-col gap-3 border-t pt-3">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      {esUnoMismo && (
+                        <div className="flex flex-col gap-1">
+                          <Label htmlFor={`contrasena-actual-${u.id}`}>Contraseña actual</Label>
+                          <Input
+                            id={`contrasena-actual-${u.id}`}
+                            type="password"
+                            value={formularioContrasena.currentPassword}
+                            onChange={(e) => setFormularioContrasena({ ...formularioContrasena, currentPassword: e.target.value })}
+                          />
+                        </div>
+                      )}
+                      <div className="flex flex-col gap-1">
+                        <Label htmlFor={`contrasena-nueva-${u.id}`}>Contraseña nueva</Label>
+                        <Input
+                          id={`contrasena-nueva-${u.id}`}
+                          type="password"
+                          value={formularioContrasena.newPassword}
+                          onChange={(e) => setFormularioContrasena({ ...formularioContrasena, newPassword: e.target.value })}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={() => confirmarContrasena(u)} disabled={procesando === u.id}>
+                        {procesando === u.id ? "Guardando..." : "Confirmar"}
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setContrasenaAbierta(null)} disabled={procesando === u.id}>
+                        Cancelar
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}
