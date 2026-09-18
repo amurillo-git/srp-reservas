@@ -109,6 +109,20 @@ export async function reportarComprobanteSinpe(
   return { ok: true };
 }
 
+export type ResultadoIniciarPagoTarjeta =
+  | { readonly ok: true; readonly checkoutUrl: string }
+  | { readonly ok: false; readonly error: string };
+
+/** Inicia el checkout de ONVO (6.8) para el deposito de una reserva TEMPORAL. */
+export async function iniciarPagoTarjeta(codigoPublico: string): Promise<ResultadoIniciarPagoTarjeta> {
+  const respuesta = await fetch(`${BASE_URL}/reservations/${codigoPublico}/card-payment`, { method: "POST" });
+  const cuerpo = await respuesta.json().catch(() => ({}));
+  if (!respuesta.ok) {
+    return { ok: false, error: cuerpo.error ?? "No se pudo iniciar el pago con tarjeta" };
+  }
+  return { ok: true, checkoutUrl: cuerpo.checkoutUrl };
+}
+
 export async function consultarReserva(codigoPublico: string): Promise<ReservaPublica | null> {
   const respuesta = await fetch(`${BASE_URL}/reservations/${encodeURIComponent(codigoPublico)}`);
   if (respuesta.status === 404) return null;

@@ -24,6 +24,7 @@ const ACCIONES = [
   { valor: "USUARIO_ACTUALIZADO", etiqueta: "Usuario actualizado" },
   { valor: "USUARIO_CONTRASENA_CAMBIADA", etiqueta: "Contraseña cambiada" },
   { valor: "USUARIO_CONTRASENA_RESETEADA", etiqueta: "Contraseña restablecida" },
+  { valor: "PAGO_TARJETA_ACTUALIZADO", etiqueta: "Pago con tarjeta actualizado" },
 ] as const;
 
 function formatoValores(valores: unknown): string {

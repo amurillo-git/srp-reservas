@@ -9,6 +9,7 @@ export interface Servicio {
   readonly precioPorPersonaGrupoPequeno: number;
   readonly precioPorPersonaGrupoGrande: number;
   readonly porcentajeDeposito: number;
+  readonly pagoTarjetaHabilitado: boolean;
 }
 
 export interface HeatPropuesto {

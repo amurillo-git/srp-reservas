@@ -19,7 +19,7 @@ import {
   listarServiciosActivos,
 } from "../services/availability.service.js";
 import { aprobarSinpe, rechazarSinpe, reportarComprobanteSinpe } from "../services/pagos.service.js";
-import { crearSesionPago, procesarWebhookOnvo } from "../services/pago-tarjeta.service.js";
+import { crearSesionPago, establecerPagoTarjetaHabilitado, procesarWebhookOnvo } from "../services/pago-tarjeta.service.js";
 import { iniciarSesion } from "../services/auth.service.js";
 import { requireAuth, type RequestAutenticado } from "./auth.middleware.js";
 import { listarEventos, registrarEvento, type ActorAuditoria } from "../services/auditoria.service.js";
@@ -70,6 +70,8 @@ const ROLES_VEN_CALENDARIO = ["ADMINISTRADOR", "OPERACION"] as const;
 const ROLES_VEN_AUDITORIA = ["ADMINISTRADOR"] as const;
 /** 14.7: "Administrador | ...usuarios..." — solo Administrador gestiona usuarios. */
 const ROLES_GESTIONAN_USUARIOS = ["ADMINISTRADOR"] as const;
+/** 14.7: solo Administrador activa/desactiva el pago con tarjeta (6.8). */
+const ROLES_GESTIONAN_PAGOS = ["ADMINISTRADOR"] as const;
 const ROLES_USUARIO = ["ADMINISTRADOR", "ATENCION", "CAJA", "OPERACION"] as const;
 const TIPOS_EXCEPCION = ["HABILITADO", "MODIFICADO", "CERRADO"] as const;
 const ESTADOS_RESERVA = [
@@ -953,6 +955,30 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
         return;
       }
       const status = resultado.motivo === "NO_ENCONTRADO" ? 404 : 400;
+      enviarError(res, status, resultado.motivo);
+    }),
+  );
+
+  // 6.8, 14.7: activar/desactivar "pagar con tarjeta" visible al cliente.
+  router.put(
+    "/admin/services/:id/card-payment",
+    requireAuth(ROLES_GESTIONAN_PAGOS),
+    conManejoDeErrores(async (req, res) => {
+      const { enabled } = req.body ?? {};
+      if (typeof enabled !== "boolean") {
+        return enviarError(res, 400, "enabled debe ser booleano");
+      }
+
+      const resultado = await establecerPagoTarjetaHabilitado(prisma, req.params.id!, enabled);
+      if (resultado.ok) {
+        await registrarEvento(prisma, actorDesde(req), {
+          accion: "PAGO_TARJETA_ACTUALIZADO", objetoTipo: "SERVICIO", objetoId: req.params.id!,
+          valoresNuevos: { enabled },
+        });
+        res.status(200).json({ ok: true });
+        return;
+      }
+      const status = resultado.motivo === "SERVICIO_NO_ENCONTRADO" ? 404 : 400;
       enviarError(res, status, resultado.motivo);
     }),
   );

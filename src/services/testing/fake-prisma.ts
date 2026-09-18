@@ -55,6 +55,7 @@ export interface FilaServicio {
   precioPorPersonaGrupoGrande: number;
   porcentajeDeposito: number;
   activo: boolean;
+  pagoTarjetaHabilitado: boolean;
 }
 
 export interface FilaPlantilla {
@@ -220,6 +221,7 @@ export class FakePrisma {
       precioPorPersonaGrupoGrande: 4000,
       porcentajeDeposito: 50,
       activo: true,
+      pagoTarjetaHabilitado: false,
       ...datos,
     };
     this.servicios.push(fila);
@@ -439,6 +441,18 @@ export class FakePrisma {
       this.servicios.find((s) => s.id === where.id) ?? null,
     findMany: async ({ where }: { where?: { activo?: boolean } } = {}) =>
       this.servicios.filter((s) => where?.activo === undefined || s.activo === where.activo),
+    update: async ({
+      where,
+      data,
+    }: {
+      where: { id: Id };
+      data: Partial<Pick<FilaServicio, "pagoTarjetaHabilitado">>;
+    }) => {
+      const fila = this.servicios.find((s) => s.id === where.id);
+      if (!fila) throw new Error(`Servicio ${where.id} no existe (fake)`);
+      Object.assign(fila, data);
+      return fila;
+    },
   };
 
   readonly heat = {

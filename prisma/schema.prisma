@@ -86,6 +86,11 @@ model Service {
   precioPorPersonaGrupoGrande  Decimal @map("precio_por_persona_grupo_grande") @db.Decimal(10, 2)
   porcentajeDeposito          Int      @default(50) @map("porcentaje_deposito") // 6.7.4
   activo                      Boolean  @default(true)
+  /// Visibilidad de "pagar con tarjeta" al cliente (6.8). Por defecto apagado:
+  /// activarlo requiere ONVO_WEBHOOK_SECRET configurado (ver
+  /// pago-tarjeta.service.ts#establecerPagoTarjetaHabilitado) para que un
+  /// pago no quede sin poder confirmarse automaticamente.
+  pagoTarjetaHabilitado       Boolean  @default(false) @map("pago_tarjeta_habilitado")
   creadoEn                    DateTime @default(now()) @map("creado_en")
 
   plantillas   ScheduleTemplate[]

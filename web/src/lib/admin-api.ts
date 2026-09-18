@@ -467,3 +467,22 @@ export async function restablecerContrasenaAdmin(
   if (status === 200) return { ok: true };
   return { ok: false, motivo: cuerpo.motivo ?? cuerpo.error ?? "No se pudo restablecer la contraseña" };
 }
+
+// ----------------------------------------------------------------------------
+// Pago con tarjeta (6.8): activar/desactivar la opcion visible al cliente.
+// ----------------------------------------------------------------------------
+
+export async function actualizarPagoTarjetaAdmin(
+  token: string,
+  serviceId: string,
+  enabled: boolean,
+): Promise<ResultadoAccionSimple> {
+  const { status, datos: cuerpo } = await enviarJsonAdmin<{ motivo?: string; error?: string }>(
+    "PUT",
+    `/admin/services/${serviceId}/card-payment`,
+    token,
+    { enabled },
+  );
+  if (status === 200) return { ok: true };
+  return { ok: false, motivo: cuerpo.motivo ?? cuerpo.error ?? "No se pudo actualizar el pago con tarjeta" };
+}

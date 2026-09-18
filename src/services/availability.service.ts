@@ -399,6 +399,8 @@ export interface ServicioPublico {
   readonly precioPorPersonaGrupoPequeno: number;
   readonly precioPorPersonaGrupoGrande: number;
   readonly porcentajeDeposito: number;
+  /** 6.8: si el cliente debe ver la opcion de pagar con tarjeta (ONVO). */
+  readonly pagoTarjetaHabilitado: boolean;
 }
 
 /** Catalogo de servicios activos (18.1: `GET /api/services`). En el MVP
@@ -414,6 +416,7 @@ export async function listarServiciosActivos(prisma: PrismaClient): Promise<read
     precioPorPersonaGrupoPequeno: Number(s.precioPorPersonaGrupoPequeno),
     precioPorPersonaGrupoGrande: Number(s.precioPorPersonaGrupoGrande),
     porcentajeDeposito: s.porcentajeDeposito,
+    pagoTarjetaHabilitado: s.pagoTarjetaHabilitado,
   }));
 }
 

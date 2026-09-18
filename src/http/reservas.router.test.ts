@@ -354,6 +354,7 @@ describe("flujo de pago con tarjeta (POST .../card-payment, POST /webhooks/onvo)
   it("crea la sesion de Checkout y, cuando ONVO notifica el pago, confirma la reserva (6.8)", async () => {
     const fake = new FakePrisma();
     crearFixtureBase(fake);
+    fake.servicios[0]!.pagoTarjetaHabilitado = true;
     const app = crearApp(comoPrisma(fake));
     const codigoPublico = await crearReservaTemporal(app);
 
@@ -384,6 +385,7 @@ describe("flujo de pago con tarjeta (POST .../card-payment, POST /webhooks/onvo)
   it("devuelve 502 si ONVO responde con error al crear la sesion", async () => {
     const fake = new FakePrisma();
     crearFixtureBase(fake);
+    fake.servicios[0]!.pagoTarjetaHabilitado = true;
     const app = crearApp(comoPrisma(fake));
     const codigoPublico = await crearReservaTemporal(app);
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 500 })));
@@ -399,6 +401,18 @@ describe("flujo de pago con tarjeta (POST .../card-payment, POST /webhooks/onvo)
       .set("X-Webhook-Secret", "secreto-incorrecto")
       .send({ type: "checkout-session.succeeded", data: { id: "clcs0001", paymentStatus: "paid" } });
     expect(respuesta.status).toBe(401);
+  });
+
+  it("devuelve 409 si el servicio tiene apagado el pago con tarjeta", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake); // pagoTarjetaHabilitado queda en false por defecto
+    const app = crearApp(comoPrisma(fake));
+    const codigoPublico = await crearReservaTemporal(app);
+
+    const respuesta = await request(app).post(`/api/reservations/${codigoPublico}/card-payment`);
+
+    expect(respuesta.status).toBe(409);
+    expect(respuesta.body.error).toBe("DESHABILITADO");
   });
 });
 
@@ -1195,6 +1209,84 @@ describe("/api/admin/users (14.7)", () => {
       .put(`/api/admin/users/${otroId}/password`)
       .set("Authorization", authSinPermiso)
       .send({ newPassword: "otra-clave-123" });
+    expect(sinPermiso.status).toBe(403);
+  });
+});
+
+describe("PUT /api/admin/services/:id/card-payment (6.8)", () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  it("activa el pago con tarjeta si el webhook esta configurado, y registra auditoria", async () => {
+    process.env.ONVO_WEBHOOK_SECRET = "webhook_secret_fake";
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const respuesta = await request(app)
+      .put(`/api/admin/services/${SERVICIO_ID}/card-payment`)
+      .set("Authorization", auth)
+      .send({ enabled: true });
+
+    expect(respuesta.status).toBe(200);
+    expect(fake.servicios[0]!.pagoTarjetaHabilitado).toBe(true);
+    expect(fake.eventosAuditoria.map((e) => e.accion)).toEqual(["PAGO_TARJETA_ACTUALIZADO"]);
+  });
+
+  it("rechaza activarlo (400) si ONVO_WEBHOOK_SECRET no esta configurado", async () => {
+    delete process.env.ONVO_WEBHOOK_SECRET;
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const respuesta = await request(app)
+      .put(`/api/admin/services/${SERVICIO_ID}/card-payment`)
+      .set("Authorization", auth)
+      .send({ enabled: true });
+
+    expect(respuesta.status).toBe(400);
+    expect(fake.servicios[0]!.pagoTarjetaHabilitado).toBe(false);
+  });
+
+  it("valida que enabled sea booleano y devuelve 404 si el servicio no existe", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const invalido = await request(app)
+      .put("/api/admin/services/algun-id/card-payment")
+      .set("Authorization", auth)
+      .send({ enabled: "si" });
+    expect(invalido.status).toBe(400);
+
+    process.env.ONVO_WEBHOOK_SECRET = "webhook_secret_fake";
+    const noExiste = await request(app)
+      .put("/api/admin/services/no-existe/card-payment")
+      .set("Authorization", auth)
+      .send({ enabled: true });
+    expect(noExiste.status).toBe(404);
+  });
+
+  it("rechaza sin token (401) y con un rol distinto de ADMINISTRADOR (403)", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+
+    const sinToken = await request(app)
+      .put(`/api/admin/services/${SERVICIO_ID}/card-payment`)
+      .send({ enabled: false });
+    expect(sinToken.status).toBe(401);
+
+    const authSinPermiso = await tokenAdminDePrueba(fake, "ATENCION");
+    const sinPermiso = await request(app)
+      .put(`/api/admin/services/${SERVICIO_ID}/card-payment`)
+      .set("Authorization", authSinPermiso)
+      .send({ enabled: false });
     expect(sinPermiso.status).toBe(403);
   });
 });

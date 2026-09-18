@@ -32,7 +32,12 @@ async function bloquearYLeerReservaPorSesion(tx: Prisma.TransactionClient, sesio
   return tx.reservation.findUnique({ where: { id: previa.id } });
 }
 
-export type MotivoRechazoSesionPago = "NO_ENCONTRADA" | "ESTADO_INVALIDO" | "VENCIDA" | "ERROR_PROVEEDOR";
+export type MotivoRechazoSesionPago =
+  | "NO_ENCONTRADA"
+  | "ESTADO_INVALIDO"
+  | "VENCIDA"
+  | "ERROR_PROVEEDOR"
+  | "DESHABILITADO";
 
 export type ResultadoCrearSesionPago =
   | { readonly ok: true; readonly checkoutUrl: string }
@@ -58,6 +63,12 @@ export async function crearSesionPago(
   if (reserva.estado !== "TEMPORAL") return { ok: false, motivo: "ESTADO_INVALIDO" };
   if (reserva.expiraEn !== null && reserva.expiraEn <= new Date()) {
     return { ok: false, motivo: "VENCIDA" };
+  }
+  // 6.8: revalida el flag aca (no solo en la capa HTTP) para que este
+  // servicio nunca abra una sesion de pago que no pueda confirmarse.
+  const servicio = await prisma.service.findUnique({ where: { id: reserva.servicioId } });
+  if (!servicio?.pagoTarjetaHabilitado) {
+    return { ok: false, motivo: "DESHABILITADO" };
   }
 
   const urlRetorno = `${process.env.WEB_APP_URL ?? "http://localhost:3001"}/mi-reserva?codigo=${reserva.codigoPublico}`;
@@ -149,4 +160,33 @@ export async function procesarWebhookOnvo(
     });
     return { ok: true };
   });
+}
+
+export type MotivoRechazoActualizarPagoTarjeta = "WEBHOOK_NO_CONFIGURADO" | "SERVICIO_NO_ENCONTRADO";
+
+export type ResultadoActualizarPagoTarjeta =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly motivo: MotivoRechazoActualizarPagoTarjeta };
+
+/**
+ * Activa/desactiva "pagar con tarjeta" para un servicio (6.8, panel admin).
+ * Salvavidas: activarlo (no desactivarlo) exige `ONVO_WEBHOOK_SECRET`
+ * configurado, para que nunca quede un pago sin poder confirmarse
+ * automaticamente (ver procesarWebhookOnvo, que rechaza todo webhook sin
+ * ese secreto).
+ */
+export async function establecerPagoTarjetaHabilitado(
+  prisma: PrismaClient,
+  servicioId: string,
+  habilitado: boolean,
+): Promise<ResultadoActualizarPagoTarjeta> {
+  if (habilitado && !process.env.ONVO_WEBHOOK_SECRET) {
+    return { ok: false, motivo: "WEBHOOK_NO_CONFIGURADO" };
+  }
+  const servicio = await prisma.service.findUnique({ where: { id: servicioId } });
+  if (!servicio) {
+    return { ok: false, motivo: "SERVICIO_NO_ENCONTRADO" };
+  }
+  await prisma.service.update({ where: { id: servicioId }, data: { pagoTarjetaHabilitado: habilitado } });
+  return { ok: true };
 }

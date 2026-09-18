@@ -139,7 +139,12 @@ export function BookingWizard() {
       )}
 
       {paso === "pago" && estado.codigoPublico && estado.plan && (
-        <PaymentStep codigoPublico={estado.codigoPublico} plan={estado.plan} onReportado={() => setPaso("confirmacion")} />
+        <PaymentStep
+          codigoPublico={estado.codigoPublico}
+          plan={estado.plan}
+          servicio={servicio}
+          onReportado={() => setPaso("confirmacion")}
+        />
       )}
 
       {paso === "confirmacion" && estado.codigoPublico && <ConfirmationStep codigoPublico={estado.codigoPublico} />}

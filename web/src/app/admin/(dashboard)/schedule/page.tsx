@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AdministrativeBlocks } from "@/components/admin/administrative-blocks";
+import { CardPaymentToggle } from "@/components/admin/card-payment-toggle";
 import { ScheduleExceptions } from "@/components/admin/schedule-exceptions";
 import { WeeklySchedule } from "@/components/admin/weekly-schedule";
 import { listarServicios } from "@/lib/api";
@@ -29,6 +30,7 @@ export default function AdminSchedulePage() {
           <WeeklySchedule token={token} serviceId={servicio.id} />
           <ScheduleExceptions token={token} serviceId={servicio.id} />
           <AdministrativeBlocks token={token} serviceId={servicio.id} />
+          <CardPaymentToggle token={token} serviceId={servicio.id} initialEnabled={servicio.pagoTarjetaHabilitado} />
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">Cargando...</p>
