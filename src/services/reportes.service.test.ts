@@ -158,6 +158,34 @@ describe("sinpePendientes", () => {
 
     expect(resultado.map((r) => r.codigoPublico)).toEqual(["SRP-3", "SRP-1"]);
   });
+
+  it("28: incluye el monto esperado y los datos del comprobante reportado", async () => {
+    const fake = new FakePrisma();
+    const reserva = crearReserva(fake, {
+      id: "1", fecha: new Date("2026-09-10"), estado: "PENDIENTE_VALIDACION_SINPE",
+      montoTotal: 20000, montoDeposito: 10000, moneda: "CRC",
+    });
+    await fake.sinpeEvidence.create({
+      data: { reservationId: reserva.id, nombrePagador: "Ana Perez", numeroOrigen: "8888-0000", referencia: "REF-1" },
+    });
+
+    const resultado = await sinpePendientes(comoPrisma(fake), SERVICIO_ID);
+
+    expect(resultado[0]).toMatchObject({
+      montoTotal: 20000, montoDeposito: 10000, moneda: "CRC",
+      nombrePagador: "Ana Perez", numeroOrigen: "8888-0000", referencia: "REF-1",
+    });
+  });
+
+  it("28: nombrePagador/numeroOrigen/referencia quedan null si no se reportaron", async () => {
+    const fake = new FakePrisma();
+    const reserva = crearReserva(fake, { id: "1", fecha: new Date("2026-09-10"), estado: "PENDIENTE_VALIDACION_SINPE" });
+    await fake.sinpeEvidence.create({ data: { reservationId: reserva.id } });
+
+    const resultado = await sinpePendientes(comoPrisma(fake), SERVICIO_ID);
+
+    expect(resultado[0]!.nombrePagador).toBeNull();
+  });
 });
 
 describe("reservasVencidas", () => {

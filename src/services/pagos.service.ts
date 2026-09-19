@@ -75,7 +75,7 @@ export async function reportarComprobanteSinpe(
   });
 }
 
-export type MotivoRechazoValidacionSinpe = "NO_ENCONTRADA" | "ESTADO_INVALIDO";
+export type MotivoRechazoValidacionSinpe = "NO_ENCONTRADA" | "ESTADO_INVALIDO" | "MONTO_INVALIDO";
 
 export type ResultadoValidarSinpe =
   | { readonly ok: true }
@@ -85,26 +85,42 @@ export type ResultadoValidarSinpe =
  * Aprueba un deposito SINPE pendiente de validacion (6.9.6-7): confirma la
  * reserva. Solo procede si el estado ACTUAL (bajo lock) sigue siendo
  * PENDIENTE_VALIDACION_SINPE.
+ *
+ * `montoPagado` (28): el admin puede indicar que el comprobante es por un
+ * monto distinto al depositado esperado (el cliente deposito de mas o de
+ * menos). Si se omite, se asume que se pago exactamente el deposito
+ * calculado (comportamiento previo). Cuando se indica, ese monto pasa a ser
+ * el "deposito pagado" de la reserva y el saldo pendiente se recalcula
+ * (montoTotal - montoPagado, nunca negativo: no hay creditos a favor).
  */
-export async function aprobarSinpe(prisma: PrismaClient, codigoPublico: string): Promise<ResultadoValidarSinpe> {
+export async function aprobarSinpe(
+  prisma: PrismaClient,
+  codigoPublico: string,
+  montoPagado?: number,
+): Promise<ResultadoValidarSinpe> {
+  if (montoPagado !== undefined && !(montoPagado > 0)) {
+    return { ok: false, motivo: "MONTO_INVALIDO" };
+  }
+
   return prisma.$transaction(async (tx) => {
     const reserva = await bloquearYLeerReserva(tx, codigoPublico);
     if (!reserva) return { ok: false, motivo: "NO_ENCONTRADA" };
     if (reserva.estado !== "PENDIENTE_VALIDACION_SINPE") return { ok: false, motivo: "ESTADO_INVALIDO" };
 
     const confirmadaEn = new Date();
+    const montoDeposito = montoPagado ?? Number(reserva.montoDeposito);
+    const montoSaldo = Math.max(0, Number(reserva.montoTotal) - montoDeposito);
     await tx.reservation.update({
       where: { id: reserva.id },
-      data: { estado: "CONFIRMADA", confirmadaEn },
+      data: { estado: "CONFIRMADA", confirmadaEn, montoDeposito, montoSaldo },
     });
     // 25: registra el cobro en el ledger de Payment, ademas de confirmar la
-    // reserva (no reemplaza montoDeposito/montoSaldo, que siguen siendo la
-    // fuente de verdad del desglose).
+    // reserva.
     await tx.payment.create({
       data: {
         reservationId: reserva.id,
         tipo: "DEPOSITO",
-        monto: Number(reserva.montoDeposito),
+        monto: montoDeposito,
         moneda: reserva.moneda,
         metodo: "SINPE_MANUAL",
         estado: "PAGADO",

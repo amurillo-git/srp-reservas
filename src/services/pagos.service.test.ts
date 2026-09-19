@@ -123,6 +123,45 @@ describe("aprobarSinpe", () => {
     const resultado = await aprobarSinpe(comoPrisma(fake), "SRP-NOEXISTE");
     expect(resultado).toEqual({ ok: false, motivo: "NO_ENCONTRADA" });
   });
+
+  it("28: acepta un monto distinto al esperado y recalcula el saldo pendiente", async () => {
+    const fake = new FakePrisma();
+    crearReserva(fake, {
+      codigoPublico: "SRP-4C", estado: "PENDIENTE_VALIDACION_SINPE",
+      montoTotal: 20000, montoDeposito: 10000, montoSaldo: 10000, moneda: "CRC",
+    });
+
+    const resultado = await aprobarSinpe(comoPrisma(fake), "SRP-4C", 15000);
+
+    expect(resultado).toEqual({ ok: true });
+    const reserva = fake.reservas.find((r) => r.codigoPublico === "SRP-4C")!;
+    expect(reserva.montoDeposito).toBe(15000);
+    expect(reserva.montoSaldo).toBe(5000);
+    expect(fake.payments[0]).toMatchObject({ tipo: "DEPOSITO", monto: 15000 });
+  });
+
+  it("28: si el monto pagado es mayor al total, el saldo pendiente queda en 0 (sin credito)", async () => {
+    const fake = new FakePrisma();
+    crearReserva(fake, {
+      codigoPublico: "SRP-4D", estado: "PENDIENTE_VALIDACION_SINPE",
+      montoTotal: 20000, montoDeposito: 10000, montoSaldo: 10000, moneda: "CRC",
+    });
+
+    await aprobarSinpe(comoPrisma(fake), "SRP-4D", 20000);
+
+    const reserva = fake.reservas.find((r) => r.codigoPublico === "SRP-4D")!;
+    expect(reserva.montoDeposito).toBe(20000);
+    expect(reserva.montoSaldo).toBe(0);
+  });
+
+  it("28: devuelve MONTO_INVALIDO si el monto pagado no es mayor a cero", async () => {
+    const fake = new FakePrisma();
+    crearReserva(fake, { codigoPublico: "SRP-4E", estado: "PENDIENTE_VALIDACION_SINPE" });
+
+    const resultado = await aprobarSinpe(comoPrisma(fake), "SRP-4E", 0);
+
+    expect(resultado).toEqual({ ok: false, motivo: "MONTO_INVALIDO" });
+  });
 });
 
 describe("rechazarSinpe", () => {

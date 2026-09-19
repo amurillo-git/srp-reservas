@@ -409,16 +409,21 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
     "/admin/reservations/:publicCode/confirm-sinpe",
     requireAuth(ROLES_VALIDAN_SINPE),
     conManejoDeErrores(async (req, res) => {
-      const resultado = await aprobarSinpe(prisma, req.params.publicCode!);
+      const { montoPagado } = req.body ?? {};
+      if (montoPagado !== undefined && typeof montoPagado !== "number") {
+        return enviarError(res, 400, "montoPagado debe ser numero");
+      }
+
+      const resultado = await aprobarSinpe(prisma, req.params.publicCode!, montoPagado);
       if (resultado.ok) {
         await registrarEvento(prisma, actorDesde(req), {
           accion: "SINPE_APROBADO", objetoTipo: "RESERVA", objetoId: req.params.publicCode!,
-          valoresNuevos: { estado: "CONFIRMADA" },
+          valoresNuevos: montoPagado !== undefined ? { estado: "CONFIRMADA", montoPagado } : { estado: "CONFIRMADA" },
         });
         res.status(200).json({ ok: true });
         return;
       }
-      const status = resultado.motivo === "NO_ENCONTRADA" ? 404 : 409;
+      const status = resultado.motivo === "NO_ENCONTRADA" ? 404 : resultado.motivo === "MONTO_INVALIDO" ? 400 : 409;
       enviarError(res, status, resultado.motivo);
     }),
   );

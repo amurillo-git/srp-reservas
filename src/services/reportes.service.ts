@@ -271,15 +271,40 @@ export async function reservasDelDia(
   return reservas.map((reserva) => ({ ...comoResumen(reserva), estado: reserva.estado }));
 }
 
-/** SINPE pendientes (25): foto del momento, no se acota por fecha porque
+export interface SinpePendiente extends ReservaResumen {
+  readonly montoTotal: number;
+  readonly montoDeposito: number;
+  readonly moneda: string;
+  /** 28: para que el admin vea el comprobante reportado (nombre/numero/
+   * referencia) al decidir si aprobar con el monto exacto u otro monto. */
+  readonly nombrePagador: string | null;
+  readonly numeroOrigen: string | null;
+  readonly referencia: string | null;
+}
+
+/** SINPE pendientes (25, 28): foto del momento, no se acota por fecha porque
  * son depositos que siguen esperando validacion HOY, sin importar cuando
- * sea la experiencia. */
-export async function sinpePendientes(prisma: PrismaClient, servicioId: string): Promise<readonly ReservaResumen[]> {
+ * sea la experiencia. Incluye el comprobante reportado para que el admin
+ * pueda revisarlo sin salir de esta pantalla. */
+export async function sinpePendientes(prisma: PrismaClient, servicioId: string): Promise<readonly SinpePendiente[]> {
   const reservas = await prisma.reservation.findMany({
     where: { servicioId, estado: "PENDIENTE_VALIDACION_SINPE" },
     orderBy: { fecha: "asc" },
   });
-  return reservas.map(comoResumen);
+  const resultado: SinpePendiente[] = [];
+  for (const reserva of reservas) {
+    const evidencia = await prisma.sinpeEvidence.findUnique({ where: { reservationId: reserva.id } });
+    resultado.push({
+      ...comoResumen(reserva),
+      montoTotal: Number(reserva.montoTotal),
+      montoDeposito: Number(reserva.montoDeposito),
+      moneda: reserva.moneda,
+      nombrePagador: evidencia?.nombrePagador ?? null,
+      numeroOrigen: evidencia?.numeroOrigen ?? null,
+      referencia: evidencia?.referencia ?? null,
+    });
+  }
+  return resultado;
 }
 
 /** Reservas vencidas (25): las que el worker de expiracion marco EXPIRADA

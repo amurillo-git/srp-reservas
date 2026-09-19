@@ -89,12 +89,51 @@ export interface ReservaResumen {
   readonly clienteTelefono: string;
 }
 
-export async function obtenerSinpePendientes(token: string, serviceId: string): Promise<readonly ReservaResumen[]> {
-  const { reporte } = await obtenerJsonAdmin<{ reporte: ReservaResumen[] }>(
+export interface SinpePendiente extends ReservaResumen {
+  readonly montoTotal: number;
+  readonly montoDeposito: number;
+  readonly moneda: string;
+  readonly nombrePagador: string | null;
+  readonly numeroOrigen: string | null;
+  readonly referencia: string | null;
+}
+
+export async function obtenerSinpePendientes(token: string, serviceId: string): Promise<readonly SinpePendiente[]> {
+  const { reporte } = await obtenerJsonAdmin<{ reporte: SinpePendiente[] }>(
     `/admin/reports/pending-sinpe?serviceId=${serviceId}`,
     token,
   );
   return reporte;
+}
+
+export async function confirmarSinpeAdmin(
+  token: string,
+  codigoPublico: string,
+  montoPagado?: number,
+): Promise<ResultadoAccionSimple> {
+  const { status, datos: cuerpo } = await enviarJsonAdmin<{ motivo?: string; error?: string }>(
+    "POST",
+    `/admin/reservations/${codigoPublico}/confirm-sinpe`,
+    token,
+    montoPagado !== undefined ? { montoPagado } : undefined,
+  );
+  if (status === 200) return { ok: true };
+  return { ok: false, motivo: cuerpo.motivo ?? cuerpo.error ?? "No se pudo aprobar el comprobante" };
+}
+
+export async function rechazarSinpeAdmin(
+  token: string,
+  codigoPublico: string,
+  motivo: string,
+): Promise<ResultadoAccionSimple> {
+  const { status, datos: cuerpo } = await enviarJsonAdmin<{ motivo?: string; error?: string }>(
+    "POST",
+    `/admin/reservations/${codigoPublico}/reject-sinpe`,
+    token,
+    { motivo },
+  );
+  if (status === 200) return { ok: true };
+  return { ok: false, motivo: cuerpo.motivo ?? cuerpo.error ?? "No se pudo rechazar el comprobante" };
 }
 
 export interface BloqueoAdmin {

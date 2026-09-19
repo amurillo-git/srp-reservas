@@ -2,21 +2,26 @@
 
 import { useEffect, useState } from "react";
 import { Ban, CreditCard, Flag, Users } from "lucide-react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { listarServicios } from "@/lib/api";
 import {
+  confirmarSinpeAdmin,
   obtenerBloqueosDelDia,
   obtenerOcupacionDelDia,
   obtenerReservasDelDia,
   obtenerSinpePendientes,
+  rechazarSinpeAdmin,
   type BloqueoAdmin,
   type OcupacionHeat,
   type ReservaDelDia,
-  type ReservaResumen,
+  type SinpePendiente,
 } from "@/lib/admin-api";
 import { obtenerSesion } from "@/lib/admin-auth";
-import { formatoFechaLarga, hoyISO } from "@/lib/format";
+import { formatoFechaLarga, formatoMoneda, hoyISO } from "@/lib/format";
 import type { Servicio } from "@/lib/types";
 
 /** Estado de carga de una seccion del dashboard: cada widget se resuelve de
@@ -75,7 +80,7 @@ export default function AdminInicioPage() {
     servicioId,
   );
   const ocupacion = usarSeccion<OcupacionHeat>((t, s) => obtenerOcupacionDelDia(t, s, fecha), token, servicioId);
-  const sinpePendientes = usarSeccion<ReservaResumen>((t, s) => obtenerSinpePendientes(t, s), token, servicioId);
+  const sinpePendientes = usarSeccion<SinpePendiente>((t, s) => obtenerSinpePendientes(t, s), token, servicioId);
   const bloqueos = usarSeccion<BloqueoAdmin>((t, s) => obtenerBloqueosDelDia(t, s, fecha), token, servicioId);
 
   return (
@@ -88,7 +93,7 @@ export default function AdminInicioPage() {
       <div className="grid gap-4 sm:grid-cols-2">
         <SeccionReservas estado={reservas} />
         <SeccionOcupacion estado={ocupacion} />
-        <SeccionSinpePendientes estado={sinpePendientes} />
+        <SeccionSinpePendientes estado={sinpePendientes} token={token} />
         <SeccionBloqueos estado={bloqueos} />
       </div>
     </div>
@@ -168,7 +173,27 @@ function SeccionOcupacion({ estado }: { estado: EstadoSeccion<OcupacionHeat> }) 
   );
 }
 
-function SeccionSinpePendientes({ estado }: { estado: EstadoSeccion<ReservaResumen> }) {
+function SeccionSinpePendientes({
+  estado,
+  token,
+}: {
+  estado: EstadoSeccion<SinpePendiente>;
+  token: string | null;
+}) {
+  const [pendientes, setPendientes] = useState<readonly SinpePendiente[] | null>(null);
+  const [expandido, setExpandido] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (estado.tipo === "lista") setPendientes(estado.datos);
+  }, [estado]);
+
+  function quitarDeLaLista(codigoPublico: string) {
+    setPendientes((actual) => actual?.filter((r) => r.codigoPublico !== codigoPublico) ?? null);
+    setExpandido(null);
+  }
+
+  const lista = pendientes ?? [];
+
   return (
     <Card className="border-none shadow-sm">
       <EncabezadoSeccion
@@ -178,21 +203,162 @@ function SeccionSinpePendientes({ estado }: { estado: EstadoSeccion<ReservaResum
       />
       <CardContent className="flex flex-col gap-2">
         <EstadoVacioOError estado={estado} />
-        {estado.tipo === "lista" && estado.datos.length === 0 && (
+        {estado.tipo === "lista" && lista.length === 0 && (
           <p className="text-sm text-muted-foreground">No hay comprobantes pendientes.</p>
         )}
         {estado.tipo === "lista" &&
-          estado.datos.map((r) => (
-            <div key={r.codigoPublico} className="flex items-center justify-between gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm">
-              <div className="min-w-0">
-                <p className="truncate font-medium">{r.clienteNombre}</p>
-                <p className="text-xs text-muted-foreground">{r.codigoPublico}</p>
-              </div>
-              <span className="text-xs text-muted-foreground">{r.fecha}</span>
-            </div>
+          token &&
+          lista.map((r) => (
+            <RevisionSinpe
+              key={r.codigoPublico}
+              reserva={r}
+              token={token}
+              expandido={expandido === r.codigoPublico}
+              onExpandir={() => setExpandido((actual) => (actual === r.codigoPublico ? null : r.codigoPublico))}
+              onResuelto={() => quitarDeLaLista(r.codigoPublico)}
+            />
           ))}
       </CardContent>
     </Card>
+  );
+}
+
+function RevisionSinpe({
+  reserva,
+  token,
+  expandido,
+  onExpandir,
+  onResuelto,
+}: {
+  reserva: SinpePendiente;
+  token: string;
+  expandido: boolean;
+  onExpandir: () => void;
+  onResuelto: () => void;
+}) {
+  const [modoMonto, setModoMonto] = useState<"exacto" | "otro">("exacto");
+  const [montoOtro, setMontoOtro] = useState("");
+  const [mostrarRechazo, setMostrarRechazo] = useState(false);
+  const [motivoRechazo, setMotivoRechazo] = useState("");
+  const [procesando, setProcesando] = useState(false);
+
+  async function aprobar() {
+    let montoPagado: number | undefined;
+    if (modoMonto === "otro") {
+      montoPagado = Number(montoOtro);
+      if (!montoOtro || !(montoPagado > 0)) {
+        toast.error("Ingresá un monto válido.");
+        return;
+      }
+    }
+    setProcesando(true);
+    const resultado = await confirmarSinpeAdmin(token, reserva.codigoPublico, montoPagado);
+    setProcesando(false);
+    if (!resultado.ok) {
+      toast.error("No se pudo aprobar el comprobante.");
+      return;
+    }
+    toast.success("Comprobante aprobado. Reserva confirmada.");
+    onResuelto();
+  }
+
+  async function rechazar() {
+    if (!motivoRechazo.trim()) {
+      toast.error("Ingresá el motivo del rechazo.");
+      return;
+    }
+    setProcesando(true);
+    const resultado = await rechazarSinpeAdmin(token, reserva.codigoPublico, motivoRechazo.trim());
+    setProcesando(false);
+    if (!resultado.ok) {
+      toast.error("No se pudo rechazar el comprobante.");
+      return;
+    }
+    toast.success("Comprobante rechazado.");
+    onResuelto();
+  }
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate font-medium">{reserva.clienteNombre}</p>
+          <p className="text-xs text-muted-foreground">
+            {reserva.codigoPublico} · {reserva.fecha}
+          </p>
+        </div>
+        <Button size="xs" variant="outline" onClick={onExpandir}>
+          {expandido ? "Cerrar" : "Revisar"}
+        </Button>
+      </div>
+
+      {expandido && (
+        <div className="flex flex-col gap-3 border-t pt-3">
+          <dl className="grid grid-cols-2 gap-y-1 text-xs">
+            <dt className="text-muted-foreground">Nombre de quien pagó</dt>
+            <dd className="text-right">{reserva.nombrePagador ?? "—"}</dd>
+            <dt className="text-muted-foreground">Número de origen</dt>
+            <dd className="text-right">{reserva.numeroOrigen ?? "—"}</dd>
+            <dt className="text-muted-foreground">Referencia</dt>
+            <dd className="text-right">{reserva.referencia ?? "—"}</dd>
+          </dl>
+
+          <div className="flex flex-col gap-2">
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name={`monto-${reserva.codigoPublico}`}
+                checked={modoMonto === "exacto"}
+                onChange={() => setModoMonto("exacto")}
+              />
+              Monto exacto ({formatoMoneda(reserva.montoDeposito, reserva.moneda)})
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name={`monto-${reserva.codigoPublico}`}
+                checked={modoMonto === "otro"}
+                onChange={() => setModoMonto("otro")}
+              />
+              Otro
+              <Input
+                type="number"
+                min={0}
+                step="1"
+                className="h-7 w-32"
+                value={montoOtro}
+                onChange={(e) => {
+                  setModoMonto("otro");
+                  setMontoOtro(e.target.value);
+                }}
+              />
+            </label>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={aprobar} disabled={procesando}>
+              {procesando ? "Procesando..." : "Aprobar"}
+            </Button>
+            <Button size="sm" variant="destructive" onClick={() => setMostrarRechazo((v) => !v)} disabled={procesando}>
+              Rechazar
+            </Button>
+          </div>
+
+          {mostrarRechazo && (
+            <div className="flex flex-col gap-2">
+              <Input
+                placeholder="Motivo del rechazo"
+                value={motivoRechazo}
+                onChange={(e) => setMotivoRechazo(e.target.value)}
+              />
+              <Button size="sm" variant="destructive" onClick={rechazar} disabled={procesando}>
+                {procesando ? "Procesando..." : "Confirmar rechazo"}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

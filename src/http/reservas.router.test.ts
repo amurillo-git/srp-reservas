@@ -319,6 +319,49 @@ describe("flujo SINPE (POST .../sinpe-evidence, admin confirm/reject-sinpe)", ()
     expect(fake.reservas.find((r) => r.codigoPublico === codigoPublico)!.estado).toBe("CONFIRMADA");
   });
 
+  it("28: al aprobar con un monto distinto, recalcula el deposito y el saldo pendiente", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const codigoPublico = await crearReservaTemporal(app);
+    const auth = await tokenAdminDePrueba(fake);
+    await request(app).post(`/api/reservations/${codigoPublico}/sinpe-evidence`).send({});
+
+    const reservaAntes = fake.reservas.find((r) => r.codigoPublico === codigoPublico)!;
+    const montoPagado = Number(reservaAntes.montoTotal); // pago el 100%, no solo el deposito
+
+    const aprobacion = await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/confirm-sinpe`)
+      .set("Authorization", auth)
+      .send({ montoPagado });
+    expect(aprobacion.status).toBe(200);
+
+    const reserva = fake.reservas.find((r) => r.codigoPublico === codigoPublico)!;
+    expect(reserva.montoDeposito).toBe(montoPagado);
+    expect(reserva.montoSaldo).toBe(0);
+  });
+
+  it("28: devuelve 400 si montoPagado no es numero, y 400 si es 0 o negativo", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const codigoPublico = await crearReservaTemporal(app);
+    const auth = await tokenAdminDePrueba(fake);
+    await request(app).post(`/api/reservations/${codigoPublico}/sinpe-evidence`).send({});
+
+    const noNumero = await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/confirm-sinpe`)
+      .set("Authorization", auth)
+      .send({ montoPagado: "mucho" });
+    expect(noNumero.status).toBe(400);
+
+    const cero = await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/confirm-sinpe`)
+      .set("Authorization", auth)
+      .send({ montoPagado: 0 });
+    expect(cero.status).toBe(400);
+  });
+
   it("un admin autenticado puede rechazar un comprobante pendiente, exigiendo un motivo (6.9.8)", async () => {
     const fake = new FakePrisma();
     crearFixtureBase(fake);
