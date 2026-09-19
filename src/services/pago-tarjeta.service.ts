@@ -154,9 +154,24 @@ export async function procesarWebhookOnvo(
     if (reserva.estado === "CONFIRMADA") return { ok: true };
     if (reserva.estado !== "TEMPORAL") return { ok: false, motivo: "ESTADO_INVALIDO" };
 
+    const confirmadaEn = new Date();
     await tx.reservation.update({
       where: { id: reserva.id },
-      data: { estado: "CONFIRMADA", confirmadaEn: new Date() },
+      data: { estado: "CONFIRMADA", confirmadaEn },
+    });
+    // 25: registra el cobro en el ledger de Payment, con el id de la sesion
+    // de ONVO para poder correlacionarlo despues.
+    await tx.payment.create({
+      data: {
+        reservationId: reserva.id,
+        tipo: "DEPOSITO",
+        monto: Number(reserva.montoDeposito),
+        moneda: reserva.moneda,
+        metodo: "TARJETA_ONVO",
+        estado: "PAGADO",
+        onvoPaymentIntentId: evento.data.id,
+        pagadoEn: confirmadaEn,
+      },
     });
     return { ok: true };
   });

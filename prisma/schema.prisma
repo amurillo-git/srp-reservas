@@ -37,7 +37,7 @@ datasource db {
 enum TipoExcepcionHorario {
   HABILITADO // abre una fecha que la plantilla semanal no abriria (feriado)
   MODIFICADO // sobreescribe horario/almuerzo de una fecha que si tiene plantilla
-  CERRADO    // cierra la fecha por completo, aunque la plantilla la abriria
+  CERRADO // cierra la fecha por completo, aunque la plantilla la abriria
 
   @@map("tipo_excepcion_horario")
 }
@@ -67,6 +67,9 @@ enum EstadoReserva {
   TEMPORAL
   PENDIENTE_VALIDACION_SINPE
   CONFIRMADA
+  /// 25 (saldo automatico/manual): el saldo tambien quedo pagado, ademas del
+  /// deposito. Distinto de CONFIRMADA, que solo implica deposito pagado.
+  PAGADA
   RECHAZADA
   CANCELADA
   EXPIRADA
@@ -74,31 +77,61 @@ enum EstadoReserva {
   @@map("estado_reserva")
 }
 
+enum TipoPago {
+  DEPOSITO
+  SALDO
+
+  @@map("tipo_pago")
+}
+
+enum MetodoPago {
+  SINPE_MANUAL
+  SINPE_ONVO
+  TARJETA_ONVO
+
+  @@map("metodo_pago")
+}
+
+enum EstadoPago {
+  PENDIENTE
+  PAGADO
+  RECHAZADO
+
+  @@map("estado_pago")
+}
+
+enum ModoSinpe {
+  MANUAL
+  ONVO
+
+  @@map("modo_sinpe")
+}
+
 /// Catalogo de servicios (16.1). Inicialmente solo "karts".
 model Service {
-  id                          String   @id @default(cuid())
-  nombre                      String
-  slug                        String   @unique
-  moneda                      String   @db.VarChar(3)
+  id                           String   @id @default(cuid())
+  nombre                       String
+  slug                         String   @unique
+  moneda                       String   @db.VarChar(3)
   /// Tarifa para grupos de 1 a 4 personas.
-  precioPorPersonaGrupoPequeno Decimal @map("precio_por_persona_grupo_pequeno") @db.Decimal(10, 2)
+  precioPorPersonaGrupoPequeno Decimal  @map("precio_por_persona_grupo_pequeno") @db.Decimal(10, 2)
   /// Tarifa para grupos de 5 personas o mas (mas economica).
-  precioPorPersonaGrupoGrande  Decimal @map("precio_por_persona_grupo_grande") @db.Decimal(10, 2)
-  porcentajeDeposito          Int      @default(50) @map("porcentaje_deposito") // 6.7.4
-  activo                      Boolean  @default(true)
+  precioPorPersonaGrupoGrande  Decimal  @map("precio_por_persona_grupo_grande") @db.Decimal(10, 2)
+  porcentajeDeposito           Int      @default(50) @map("porcentaje_deposito") // 6.7.4
+  activo                       Boolean  @default(true)
   /// Visibilidad de "pagar con tarjeta" al cliente (6.8). Por defecto apagado:
   /// activarlo requiere ONVO_WEBHOOK_SECRET configurado (ver
   /// pago-tarjeta.service.ts#establecerPagoTarjetaHabilitado) para que un
   /// pago no quede sin poder confirmarse automaticamente.
-  pagoTarjetaHabilitado       Boolean  @default(false) @map("pago_tarjeta_habilitado")
-  creadoEn                    DateTime @default(now()) @map("creado_en")
+  pagoTarjetaHabilitado        Boolean  @default(false) @map("pago_tarjeta_habilitado")
+  creadoEn                     DateTime @default(now()) @map("creado_en")
 
-  plantillas   ScheduleTemplate[]
-  excepciones  ScheduleException[]
-  bloqueos     AdministrativeBlock[]
-  lotes        OperationalBatch[]
-  heats        Heat[]
-  reservas     Reservation[]
+  plantillas  ScheduleTemplate[]
+  excepciones ScheduleException[]
+  bloqueos    AdministrativeBlock[]
+  lotes       OperationalBatch[]
+  heats       Heat[]
+  reservas    Reservation[]
 
   @@map("services")
 }
@@ -107,16 +140,16 @@ model Service {
 /// Un unico intervalo por dia de semana en el MVP; ventanas puntuales extra se
 /// logran con ScheduleException para esa fecha.
 model ScheduleTemplate {
-  id               String   @id @default(cuid())
-  servicioId       String   @map("service_id")
+  id             String   @id @default(cuid())
+  servicioId     String   @map("service_id")
   /// 0 = domingo ... 6 = sabado (convencion Date#getUTCDay()).
-  diaSemana        Int      @map("dia_semana")
-  horaApertura     String   @map("hora_apertura") @db.VarChar(5)
-  horaCierre       String   @map("hora_cierre") @db.VarChar(5)
-  almuerzoInicio   String?  @map("almuerzo_inicio") @db.VarChar(5)
-  almuerzoFin      String?  @map("almuerzo_fin") @db.VarChar(5)
-  activo           Boolean  @default(true)
-  creadoEn         DateTime @default(now()) @map("creado_en")
+  diaSemana      Int      @map("dia_semana")
+  horaApertura   String   @map("hora_apertura") @db.VarChar(5)
+  horaCierre     String   @map("hora_cierre") @db.VarChar(5)
+  almuerzoInicio String?  @map("almuerzo_inicio") @db.VarChar(5)
+  almuerzoFin    String?  @map("almuerzo_fin") @db.VarChar(5)
+  activo         Boolean  @default(true)
+  creadoEn       DateTime @default(now()) @map("creado_en")
 
   servicio Service @relation(fields: [servicioId], references: [id])
 
@@ -127,16 +160,16 @@ model ScheduleTemplate {
 /// Excepcion de calendario para una fecha puntual (6.2: los feriados no se
 /// asumen abiertos automaticamente).
 model ScheduleException {
-  id               String                @id @default(cuid())
-  servicioId       String                @map("service_id")
-  fecha            DateTime              @db.Date
-  tipo             TipoExcepcionHorario
-  horaApertura     String?               @map("hora_apertura") @db.VarChar(5)
-  horaCierre       String?               @map("hora_cierre") @db.VarChar(5)
-  almuerzoInicio   String?               @map("almuerzo_inicio") @db.VarChar(5)
-  almuerzoFin      String?               @map("almuerzo_fin") @db.VarChar(5)
-  motivo           String?
-  creadoEn         DateTime              @default(now()) @map("creado_en")
+  id             String               @id @default(cuid())
+  servicioId     String               @map("service_id")
+  fecha          DateTime             @db.Date
+  tipo           TipoExcepcionHorario
+  horaApertura   String?              @map("hora_apertura") @db.VarChar(5)
+  horaCierre     String?              @map("hora_cierre") @db.VarChar(5)
+  almuerzoInicio String?              @map("almuerzo_inicio") @db.VarChar(5)
+  almuerzoFin    String?              @map("almuerzo_fin") @db.VarChar(5)
+  motivo         String?
+  creadoEn       DateTime             @default(now()) @map("creado_en")
 
   servicio Service @relation(fields: [servicioId], references: [id])
 
@@ -146,13 +179,13 @@ model ScheduleException {
 
 /// Cierre temporal o evento privado (16.1).
 model AdministrativeBlock {
-  id          String   @id @default(cuid())
-  servicioId  String   @map("service_id")
-  fecha       DateTime @db.Date
-  horaInicio  String   @map("hora_inicio") @db.VarChar(5)
-  horaFin     String   @map("hora_fin") @db.VarChar(5)
-  motivo      String?
-  creadoEn    DateTime @default(now()) @map("creado_en")
+  id         String   @id @default(cuid())
+  servicioId String   @map("service_id")
+  fecha      DateTime @db.Date
+  horaInicio String   @map("hora_inicio") @db.VarChar(5)
+  horaFin    String   @map("hora_fin") @db.VarChar(5)
+  motivo     String?
+  creadoEn   DateTime @default(now()) @map("creado_en")
 
   servicio Service @relation(fields: [servicioId], references: [id])
 
@@ -162,17 +195,17 @@ model AdministrativeBlock {
 
 /// Lote de uno o mas heats consecutivos y su limpieza posterior (16.4).
 model OperationalBatch {
-  id                   String     @id @default(cuid())
-  servicioId           String     @map("service_id")
-  fecha                DateTime   @db.Date
-  horaInicio           String     @map("hora_inicio") @db.VarChar(5)
-  horaFinUltimoHeat    String     @map("hora_fin_ultimo_heat") @db.VarChar(5)
-  horaInicioLimpieza   String     @map("hora_inicio_limpieza") @db.VarChar(5)
-  horaFinLimpieza      String     @map("hora_fin_limpieza") @db.VarChar(5)
-  cantidadHeats        Int        @map("cantidad_heats")
-  estado               EstadoLote @default(ACTIVO)
-  creadoEn             DateTime   @default(now()) @map("creado_en")
-  actualizadoEn        DateTime   @updatedAt @map("actualizado_en")
+  id                 String     @id @default(cuid())
+  servicioId         String     @map("service_id")
+  fecha              DateTime   @db.Date
+  horaInicio         String     @map("hora_inicio") @db.VarChar(5)
+  horaFinUltimoHeat  String     @map("hora_fin_ultimo_heat") @db.VarChar(5)
+  horaInicioLimpieza String     @map("hora_inicio_limpieza") @db.VarChar(5)
+  horaFinLimpieza    String     @map("hora_fin_limpieza") @db.VarChar(5)
+  cantidadHeats      Int        @map("cantidad_heats")
+  estado             EstadoLote @default(ACTIVO)
+  creadoEn           DateTime   @default(now()) @map("creado_en")
+  actualizadoEn      DateTime   @updatedAt @map("actualizado_en")
 
   servicio Service @relation(fields: [servicioId], references: [id])
   heats    Heat[]
@@ -233,46 +266,86 @@ model HeatAllocation {
 /// Encabezado de reserva (16.2). Sin Customer/Payment todavia: datos de
 /// contacto minimos inline; el estado de pago se reduce a EstadoReserva.
 model Reservation {
-  id                String        @id @default(cuid())
+  id                  String        @id @default(cuid())
   // Nombre de restriccion explicito (16.6/8.8.6): ver comentario analogo en
   // Heat mas arriba.
-  codigoPublico     String        @unique(map: "reservations_public_code_key") @map("public_code")
-  servicioId        String        @map("service_id")
-  fecha             DateTime      @db.Date
-  cantidadPersonas  Int           @map("cantidad_personas")
-  estado            EstadoReserva @default(TEMPORAL)
-  moneda            String        @db.VarChar(3)
-  montoTotal        Decimal       @map("monto_total") @db.Decimal(10, 2)
-  montoDeposito     Decimal       @map("monto_deposito") @db.Decimal(10, 2)
-  montoSaldo        Decimal       @map("monto_saldo") @db.Decimal(10, 2)
+  codigoPublico       String        @unique(map: "reservations_public_code_key") @map("public_code")
+  servicioId          String        @map("service_id")
+  fecha               DateTime      @db.Date
+  cantidadPersonas    Int           @map("cantidad_personas")
+  estado              EstadoReserva @default(TEMPORAL)
+  moneda              String        @db.VarChar(3)
+  montoTotal          Decimal       @map("monto_total") @db.Decimal(10, 2)
+  montoDeposito       Decimal       @map("monto_deposito") @db.Decimal(10, 2)
+  montoSaldo          Decimal       @map("monto_saldo") @db.Decimal(10, 2)
   /// Clave de idempotencia (8.8.7): evita doble clic / reintento de red.
-  claveIdempotencia String        @unique(map: "reservations_clave_idempotencia_key") @map("clave_idempotencia")
-  clienteNombre     String        @map("cliente_nombre")
-  clienteTelefono   String        @map("cliente_telefono")
-  clienteEmail      String?       @map("cliente_email")
-  expiraEn          DateTime?     @map("expira_en") // 6.7.1: reserva temporal, 30 min
-  creadoEn          DateTime      @default(now()) @map("creado_en")
-  actualizadoEn     DateTime      @updatedAt @map("actualizado_en")
-  confirmadaEn      DateTime?     @map("confirmada_en")
-  canceladaEn       DateTime?     @map("cancelada_en")
+  claveIdempotencia   String        @unique(map: "reservations_clave_idempotencia_key") @map("clave_idempotencia")
+  clienteNombre       String        @map("cliente_nombre")
+  clienteTelefono     String        @map("cliente_telefono")
+  clienteEmail        String?       @map("cliente_email")
+  expiraEn            DateTime?     @map("expira_en") // 6.7.1: reserva temporal, 30 min
+  creadoEn            DateTime      @default(now()) @map("creado_en")
+  actualizadoEn       DateTime      @updatedAt @map("actualizado_en")
+  confirmadaEn        DateTime?     @map("confirmada_en")
+  canceladaEn         DateTime?     @map("cancelada_en")
   /// 6.9.8: motivo obligatorio al rechazar un deposito SINPE.
-  motivoRechazo     String?       @map("motivo_rechazo")
-  rechazadaEn       DateTime?     @map("rechazada_en")
+  motivoRechazo       String?       @map("motivo_rechazo")
+  rechazadaEn         DateTime?     @map("rechazada_en")
   /// Sesion de Checkout de ONVO (6.8): la crea pago-tarjeta.service.ts al
   /// iniciar el pago con tarjeta; el webhook de ONVO la usa para encontrar
   /// la reserva sin depender del codigo publico, que ONVO no conoce.
-  pagoTarjetaSesionId String?     @unique(map: "reservations_pago_tarjeta_sesion_id_key") @map("pago_tarjeta_sesion_id")
+  pagoTarjetaSesionId String?       @unique(map: "reservations_pago_tarjeta_sesion_id_key") @map("pago_tarjeta_sesion_id")
   /// Contador incrementado por reprogramarReserva (14.6, 25.8): permite
   /// reportar cuantas reprogramaciones hubo en un periodo sin necesitar un
   /// historial de auditoria completo (fuera de alcance de este slice).
-  vecesReprogramada Int           @default(0) @map("veces_reprogramada")
+  vecesReprogramada   Int           @default(0) @map("veces_reprogramada")
 
   servicio      Service          @relation(fields: [servicioId], references: [id])
   asignaciones  HeatAllocation[]
   sinpeEvidence SinpeEvidence?
+  pagos         Payment[]
 
   @@index([servicioId, fecha])
   @@map("reservations")
+}
+
+/// Ledger de cobros de una reserva (25): un registro por cada intento de
+/// cobro del deposito o del saldo, sin importar el metodo. No reemplaza los
+/// montos ya calculados en Reservation (montoDeposito/montoSaldo siguen
+/// siendo la fuente de verdad del desglose); esto es el historial de QUE se
+/// intento cobrar, con QUE metodo, y si quedo pagado — necesario para poder
+/// asociar el id de PaymentIntent de ONVO a cada cobro individualmente.
+model Payment {
+  id                  String     @id @default(cuid())
+  reservationId       String     @map("reservation_id")
+  tipo                TipoPago
+  monto               Decimal    @db.Decimal(10, 2)
+  moneda              String     @db.VarChar(3)
+  metodo              MetodoPago
+  estado              EstadoPago @default(PENDIENTE)
+  /// Id de la intencion de pago de ONVO (metodo SINPE_ONVO o TARJETA_ONVO).
+  /// Null para SINPE_MANUAL. Unico: cada intencion de ONVO pertenece a un
+  /// unico cobro.
+  onvoPaymentIntentId String?    @unique @map("onvo_payment_intent_id")
+  creadoEn            DateTime   @default(now()) @map("creado_en")
+  pagadoEn            DateTime?  @map("pagado_en")
+
+  reservation Reservation @relation(fields: [reservationId], references: [id])
+
+  @@index([reservationId])
+  @@map("payments")
+}
+
+/// Configuracion global de un unico registro (25): que metodo de deteccion
+/// de SINPE usa el sistema. MANUAL = como hoy (el cliente reporta comprobante
+/// y un admin lo revisa). ONVO = ONVO detecta la transferencia y confirma
+/// via webhook, sin revision manual. Nunca los dos a la vez.
+model ConfiguracionPago {
+  id            String    @id @default("singleton")
+  modoSinpe     ModoSinpe @default(MANUAL) @map("modo_sinpe")
+  actualizadoEn DateTime  @updatedAt @map("actualizado_en")
+
+  @@map("configuracion_pago")
 }
 
 /// Comprobante SINPE reportado por el cliente (16.1, 6.9, 11.3). Relacion 1:1

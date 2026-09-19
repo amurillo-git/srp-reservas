@@ -91,6 +91,24 @@ describe("aprobarSinpe", () => {
     expect(reserva.confirmadaEn).toBeInstanceOf(Date);
   });
 
+  it("25: registra el pago del deposito en el ledger de Payment", async () => {
+    const fake = new FakePrisma();
+    crearReserva(fake, {
+      codigoPublico: "SRP-4B", estado: "PENDIENTE_VALIDACION_SINPE",
+      montoDeposito: 12345, moneda: "CRC",
+    });
+
+    await aprobarSinpe(comoPrisma(fake), "SRP-4B");
+
+    const reserva = fake.reservas.find((r) => r.codigoPublico === "SRP-4B")!;
+    expect(fake.payments).toHaveLength(1);
+    expect(fake.payments[0]).toMatchObject({
+      reservationId: reserva.id, tipo: "DEPOSITO", monto: 12345, moneda: "CRC",
+      metodo: "SINPE_MANUAL", estado: "PAGADO",
+    });
+    expect(fake.payments[0]!.pagadoEn).toBeInstanceOf(Date);
+  });
+
   it("devuelve ESTADO_INVALIDO si no esta pendiente de validacion", async () => {
     const fake = new FakePrisma();
     crearReserva(fake, { codigoPublico: "SRP-5", estado: "TEMPORAL" });

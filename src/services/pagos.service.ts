@@ -92,9 +92,24 @@ export async function aprobarSinpe(prisma: PrismaClient, codigoPublico: string):
     if (!reserva) return { ok: false, motivo: "NO_ENCONTRADA" };
     if (reserva.estado !== "PENDIENTE_VALIDACION_SINPE") return { ok: false, motivo: "ESTADO_INVALIDO" };
 
+    const confirmadaEn = new Date();
     await tx.reservation.update({
       where: { id: reserva.id },
-      data: { estado: "CONFIRMADA", confirmadaEn: new Date() },
+      data: { estado: "CONFIRMADA", confirmadaEn },
+    });
+    // 25: registra el cobro en el ledger de Payment, ademas de confirmar la
+    // reserva (no reemplaza montoDeposito/montoSaldo, que siguen siendo la
+    // fuente de verdad del desglose).
+    await tx.payment.create({
+      data: {
+        reservationId: reserva.id,
+        tipo: "DEPOSITO",
+        monto: Number(reserva.montoDeposito),
+        moneda: reserva.moneda,
+        metodo: "SINPE_MANUAL",
+        estado: "PAGADO",
+        pagadoEn: confirmadaEn,
+      },
     });
     return { ok: true };
   });

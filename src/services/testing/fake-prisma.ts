@@ -194,6 +194,19 @@ export interface FilaComprobanteSinpe {
   reportadoEn: Date;
 }
 
+export interface FilaPago {
+  id: Id;
+  reservationId: Id;
+  tipo: "DEPOSITO" | "SALDO";
+  monto: number;
+  moneda: string;
+  metodo: "SINPE_MANUAL" | "SINPE_ONVO" | "TARJETA_ONVO";
+  estado: "PENDIENTE" | "PAGADO" | "RECHAZADO";
+  onvoPaymentIntentId?: string | null;
+  creadoEn: Date;
+  pagadoEn?: Date | null;
+}
+
 export class FakePrisma {
   readonly servicios: FilaServicio[] = [];
   readonly plantillas: FilaPlantilla[] = [];
@@ -206,6 +219,7 @@ export class FakePrisma {
   readonly comprobantesSinpe: FilaComprobanteSinpe[] = [];
   readonly usuarios: FilaUsuario[] = [];
   readonly eventosAuditoria: FilaEventoAuditoria[] = [];
+  readonly payments: FilaPago[] = [];
 
   private proximoConflictoUnico: { tabla: "heat" | "reservation"; target: string; vecesRestantes: number } | null =
     null;
@@ -734,6 +748,20 @@ export class FakePrisma {
     },
   };
 
+  readonly payment = {
+    create: async ({
+      data,
+    }: {
+      data: Omit<FilaPago, "id" | "creadoEn" | "estado"> & { estado?: FilaPago["estado"]; creadoEn?: Date };
+    }) => {
+      const fila: FilaPago = { id: nuevoId("pago"), creadoEn: new Date(), estado: "PENDIENTE", ...data };
+      this.payments.push(fila);
+      return fila;
+    },
+    findMany: async ({ where }: { where?: { reservationId?: Id } } = {}) =>
+      this.payments.filter((p) => where?.reservationId === undefined || p.reservationId === where.reservationId),
+  };
+
   readonly user = {
     findUnique: async ({ where }: { where: { email?: string; id?: Id } }) =>
       this.usuarios.find(
@@ -842,6 +870,7 @@ export class FakePrisma {
       reservas: [...this.reservas],
       comprobantesSinpe: [...this.comprobantesSinpe],
       usuarios: [...this.usuarios],
+      payments: [...this.payments],
     };
     try {
       return await fn(this);
@@ -856,6 +885,7 @@ export class FakePrisma {
       this.reservas.splice(0, this.reservas.length, ...copia.reservas);
       this.comprobantesSinpe.splice(0, this.comprobantesSinpe.length, ...copia.comprobantesSinpe);
       this.usuarios.splice(0, this.usuarios.length, ...copia.usuarios);
+      this.payments.splice(0, this.payments.length, ...copia.payments);
       throw error;
     }
   }

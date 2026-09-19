@@ -196,6 +196,35 @@ describe("procesarWebhookOnvo", () => {
     expect(fake.reservas[0]!.confirmadaEn).toBeInstanceOf(Date);
   });
 
+  it("25: registra el pago del deposito en el ledger de Payment, con el id de la sesion de ONVO", async () => {
+    const fake = new FakePrisma();
+    crearReservaTemporal(fake, { pagoTarjetaSesionId: "clcs0001", montoDeposito: 8000, moneda: "CRC" });
+
+    await procesarWebhookOnvo(comoPrisma(fake), "webhook_secret_fake", {
+      type: "checkout-session.succeeded",
+      data: { id: "clcs0001", paymentStatus: "paid" },
+    });
+
+    expect(fake.payments).toHaveLength(1);
+    expect(fake.payments[0]).toMatchObject({
+      reservationId: fake.reservas[0]!.id, tipo: "DEPOSITO", monto: 8000, moneda: "CRC",
+      metodo: "TARJETA_ONVO", estado: "PAGADO", onvoPaymentIntentId: "clcs0001",
+    });
+    expect(fake.payments[0]!.pagadoEn).toBeInstanceOf(Date);
+  });
+
+  it("25: un webhook reintentado sobre una reserva ya CONFIRMADA no duplica el Payment", async () => {
+    const fake = new FakePrisma();
+    crearReservaTemporal(fake, { pagoTarjetaSesionId: "clcs0001", estado: "CONFIRMADA", confirmadaEn: new Date(0) });
+
+    await procesarWebhookOnvo(comoPrisma(fake), "webhook_secret_fake", {
+      type: "checkout-session.succeeded",
+      data: { id: "clcs0001", paymentStatus: "paid" },
+    });
+
+    expect(fake.payments).toHaveLength(0);
+  });
+
   it("rechaza el webhook si el header X-Webhook-Secret no coincide", async () => {
     const fake = new FakePrisma();
     crearReservaTemporal(fake, { pagoTarjetaSesionId: "clcs0001" });
