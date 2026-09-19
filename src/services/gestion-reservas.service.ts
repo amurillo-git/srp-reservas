@@ -170,15 +170,32 @@ export async function reprogramarReserva(
           }
 
           // 3) Revalidacion completa de precio/cantidad (14.5).
+          //
+          // 28: si el deposito ya esta pagado (CONFIRMADA), NO se recalcula
+          // al requerido de tabla para la nueva cantidad — el cliente ya
+          // pago un monto real que puede no coincidir con el 50% (28, monto
+          // distinto al esperado al aprobar SINPE). La diferencia (positiva
+          // si crecio el grupo, o negativa si se achico) se absorbe
+          // unicamente en el saldo pendiente, sin generar creditos a favor
+          // (nunca queda negativo).
+          const montoTotal = planFinal.precio?.montoTotal ?? reserva.montoTotal;
+          const depositoYaPagado = reserva.estado === "CONFIRMADA";
+          const montoDeposito = depositoYaPagado
+            ? reserva.montoDeposito
+            : (planFinal.precio?.montoDeposito ?? reserva.montoDeposito);
+          const montoSaldo = depositoYaPagado
+            ? Math.max(0, Number(montoTotal) - Number(reserva.montoDeposito))
+            : (planFinal.precio?.montoSaldo ?? reserva.montoSaldo);
+
           await tx.reservation.update({
             where: { id: reserva.id },
             data: {
               fecha: fechaISOaDate(nuevaSolicitud.fecha),
               cantidadPersonas: nuevaSolicitud.cantidadPersonas,
               moneda: planFinal.precio?.moneda ?? reserva.moneda,
-              montoTotal: planFinal.precio?.montoTotal ?? reserva.montoTotal,
-              montoDeposito: planFinal.precio?.montoDeposito ?? reserva.montoDeposito,
-              montoSaldo: planFinal.precio?.montoSaldo ?? reserva.montoSaldo,
+              montoTotal,
+              montoDeposito,
+              montoSaldo,
               // 25.8: contador minimo para el reporte de reprogramaciones,
               // sin necesitar un historial de auditoria completo.
               vecesReprogramada: { increment: 1 },

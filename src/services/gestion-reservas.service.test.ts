@@ -180,6 +180,88 @@ describe("reprogramarReserva", () => {
     expect(fake.reservas.find((r) => r.id === reserva.id)!.cantidadPersonas).toBe(3);
   });
 
+  it("28: si el deposito ya esta pagado (CONFIRMADA), aumentar personas no toca el deposito, solo el saldo", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const lote = fake.crearLote({
+      id: "lote-28a", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
+      horaInicio: "10:00", horaFinUltimoHeat: "10:15",
+      horaInicioLimpieza: "10:15", horaFinLimpieza: "10:30", cantidadHeats: 1,
+    });
+    fake.crearHeat({ id: "heat-28a", loteId: lote.id, servicioId: SERVICIO_ID, fecha: FECHA_DATE, horaInicio: "10:00", horaFin: "10:15", posicionEnLote: 1 });
+    const { reserva } = fake.crearReservaConAsignacion({
+      heatId: "heat-28a", servicioId: SERVICIO_ID, fecha: FECHA_DATE, cantidadParticipantes: 2, estado: "CONFIRMADA",
+    });
+    // Simula que se aprobo con un monto distinto al 50% de tabla (28: monto
+    // real al aprobar SINPE) — el deposito pagado es 6000, no 4000.
+    const fila = fake.reservas.find((r) => r.id === reserva.id)!;
+    fila.montoTotal = 8000;
+    fila.montoDeposito = 6000;
+    fila.montoSaldo = 2000;
+
+    const resultado = await reprogramarReserva(comoPrisma(fake), reserva.codigoPublico, {
+      fecha: FECHA_ISO, horaInicioCandidata: "10:00", cantidadPersonas: 4,
+    });
+
+    expect(resultado.ok).toBe(true);
+    const actualizada = fake.reservas.find((r) => r.id === reserva.id)!;
+    expect(actualizada.montoTotal).toBe(16000); // 4 personas x 4000
+    expect(actualizada.montoDeposito).toBe(6000); // intacto, lo ya pagado
+    expect(actualizada.montoSaldo).toBe(10000); // 16000 - 6000
+  });
+
+  it("28: si el deposito ya pagado es mayor al nuevo total (reducir personas), el saldo pendiente queda en 0", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const lote = fake.crearLote({
+      id: "lote-28b", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
+      horaInicio: "10:00", horaFinUltimoHeat: "10:15",
+      horaInicioLimpieza: "10:15", horaFinLimpieza: "10:30", cantidadHeats: 1,
+    });
+    fake.crearHeat({ id: "heat-28b", loteId: lote.id, servicioId: SERVICIO_ID, fecha: FECHA_DATE, horaInicio: "10:00", horaFin: "10:15", posicionEnLote: 1 });
+    const { reserva } = fake.crearReservaConAsignacion({
+      heatId: "heat-28b", servicioId: SERVICIO_ID, fecha: FECHA_DATE, cantidadParticipantes: 4, estado: "CONFIRMADA",
+    });
+    const fila = fake.reservas.find((r) => r.id === reserva.id)!;
+    fila.montoTotal = 16000;
+    fila.montoDeposito = 16000; // pago el 100% del original
+    fila.montoSaldo = 0;
+
+    const resultado = await reprogramarReserva(comoPrisma(fake), reserva.codigoPublico, {
+      fecha: FECHA_ISO, horaInicioCandidata: "10:00", cantidadPersonas: 2,
+    });
+
+    expect(resultado.ok).toBe(true);
+    const actualizada = fake.reservas.find((r) => r.id === reserva.id)!;
+    expect(actualizada.montoTotal).toBe(8000); // 2 personas x 4000
+    expect(actualizada.montoDeposito).toBe(16000); // intacto
+    expect(actualizada.montoSaldo).toBe(0); // sin credito, min 0
+  });
+
+  it("28: si todavia no hay nada pagado (PENDIENTE_VALIDACION_SINPE), si recalcula el deposito requerido", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const lote = fake.crearLote({
+      id: "lote-28c", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
+      horaInicio: "10:00", horaFinUltimoHeat: "10:15",
+      horaInicioLimpieza: "10:15", horaFinLimpieza: "10:30", cantidadHeats: 1,
+    });
+    fake.crearHeat({ id: "heat-28c", loteId: lote.id, servicioId: SERVICIO_ID, fecha: FECHA_DATE, horaInicio: "10:00", horaFin: "10:15", posicionEnLote: 1 });
+    const { reserva } = fake.crearReservaConAsignacion({
+      heatId: "heat-28c", servicioId: SERVICIO_ID, fecha: FECHA_DATE, cantidadParticipantes: 2, estado: "PENDIENTE_VALIDACION_SINPE",
+    });
+
+    const resultado = await reprogramarReserva(comoPrisma(fake), reserva.codigoPublico, {
+      fecha: FECHA_ISO, horaInicioCandidata: "10:00", cantidadPersonas: 4,
+    });
+
+    expect(resultado.ok).toBe(true);
+    const actualizada = fake.reservas.find((r) => r.id === reserva.id)!;
+    expect(actualizada.montoTotal).toBe(16000);
+    expect(actualizada.montoDeposito).toBe(8000); // 50% de tabla, como antes
+    expect(actualizada.montoSaldo).toBe(8000);
+  });
+
   it("devuelve NO_ENCONTRADA si el codigo no existe", async () => {
     const fake = new FakePrisma();
     const resultado = await reprogramarReserva(comoPrisma(fake), "SRP-NOEXISTE", {
