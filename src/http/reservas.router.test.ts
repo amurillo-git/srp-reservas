@@ -234,6 +234,55 @@ describe("GET /api/reservations/:publicCode", () => {
     expect(JSON.stringify(respuesta.body)).not.toContain("horaFinLimpieza");
     expect("liberacionOperativa" in respuesta.body).toBe(false);
   });
+
+  it("incluye expiraEn y si el servicio tiene pago con tarjeta habilitado, para que el cliente pueda retomar el pago (14.8)", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    fake.servicios[0]!.pagoTarjetaHabilitado = true;
+    const app = crearApp(comoPrisma(fake));
+
+    const creacion = await request(app)
+      .post("/api/reservations")
+      .set("Idempotency-Key", "idem-http-consulta-expira")
+      .send({
+        serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "09:00", partySize: 5,
+        customer: { name: "Ana", phone: "8888-0000" },
+      });
+    const codigoPublico: string = creacion.body.codigoPublico;
+
+    const respuesta = await request(app).get(`/api/reservations/${codigoPublico}`);
+
+    expect(respuesta.status).toBe(200);
+    expect(respuesta.body.pagoTarjetaHabilitado).toBe(true);
+    expect(typeof respuesta.body.expiraEn).toBe("string");
+    expect(new Date(respuesta.body.expiraEn).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("devuelve expiraEn null y pagoTarjetaHabilitado false para una reserva ya confirmada por SINPE", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const creacion = await request(app)
+      .post("/api/reservations")
+      .set("Idempotency-Key", "idem-http-consulta-confirmada")
+      .send({
+        serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "09:00", partySize: 5,
+        customer: { name: "Ana", phone: "8888-0000" },
+      });
+    const codigoPublico: string = creacion.body.codigoPublico;
+    await request(app).post(`/api/reservations/${codigoPublico}/sinpe-evidence`).send({});
+    await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/confirm-sinpe`)
+      .set("Authorization", auth);
+
+    const respuesta = await request(app).get(`/api/reservations/${codigoPublico}`);
+
+    expect(respuesta.status).toBe(200);
+    expect(respuesta.body.pagoTarjetaHabilitado).toBe(false);
+    expect(respuesta.body.expiraEn).toBeNull();
+  });
 });
 
 describe("flujo SINPE (POST .../sinpe-evidence, admin confirm/reject-sinpe)", () => {

@@ -141,8 +141,8 @@ export function BookingWizard() {
       {paso === "pago" && estado.codigoPublico && estado.plan && (
         <PaymentStep
           codigoPublico={estado.codigoPublico}
-          plan={estado.plan}
-          servicio={servicio}
+          deposito={estado.plan.disponible ? estado.plan.precio : undefined}
+          pagoTarjetaHabilitado={servicio.pagoTarjetaHabilitado}
           onReportado={() => setPaso("confirmacion")}
         />
       )}

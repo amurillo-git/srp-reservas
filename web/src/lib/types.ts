@@ -72,4 +72,6 @@ export interface ReservaPublica {
   readonly montoDeposito: number;
   readonly montoSaldo: number;
   readonly lotes: readonly LoteDeReservaPublico[];
+  readonly expiraEn: string | null;
+  readonly pagoTarjetaHabilitado: boolean;
 }

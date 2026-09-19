@@ -480,6 +480,13 @@ export interface ReservaPublica {
   readonly montoSaldo: number;
   /** Ordenados cronologicamente; nunca incluyen la limpieza (8.7, 10.7). */
   readonly lotes: readonly LoteDeReservaPublico[];
+  /** 14.8: null si la reserva no esta en espera de pago (ya no tiene sentido
+   * un plazo). Le permite a "Consultá tu reserva" mostrar cuanto tiempo le
+   * queda al cliente para retomar el pago. */
+  readonly expiraEn: string | null;
+  /** 14.8: si el cliente puede retomar el pago con tarjeta desde "Consultá
+   * tu reserva" (refleja el toggle admin, 6.8). */
+  readonly pagoTarjetaHabilitado: boolean;
 }
 
 /**
@@ -495,6 +502,8 @@ export async function consultarReservaPorCodigo(
 ): Promise<ReservaPublica | null> {
   const reserva = await prisma.reservation.findUnique({ where: { codigoPublico } });
   if (!reserva) return null;
+
+  const servicio = await prisma.service.findUnique({ where: { id: reserva.servicioId } });
 
   const asignaciones = await prisma.heatAllocation.findMany({
     where: { reservationId: reserva.id, estado: "ACTIVA" },
@@ -527,6 +536,8 @@ export async function consultarReservaPorCodigo(
     montoDeposito: Number(reserva.montoDeposito),
     montoSaldo: Number(reserva.montoSaldo),
     lotes,
+    expiraEn: reserva.estado === "TEMPORAL" ? (reserva.expiraEn?.toISOString() ?? null) : null,
+    pagoTarjetaHabilitado: servicio?.pagoTarjetaHabilitado ?? false,
   };
 }
 

@@ -10,20 +10,23 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { formatoMoneda } from "@/lib/format";
 import { iniciarPagoTarjeta, reportarComprobanteSinpe } from "@/lib/api";
-import type { PlanDisponibilidad, Servicio } from "@/lib/types";
 
 const SINPE_PHONE = process.env.NEXT_PUBLIC_SINPE_PHONE ?? "0000-0000";
 const MINUTOS_RETENCION = 30;
 
 export function PaymentStep({
   codigoPublico,
-  plan,
-  servicio,
+  deposito,
+  pagoTarjetaHabilitado,
+  segundosRestantesIniciales = MINUTOS_RETENCION * 60,
   onReportado,
 }: {
   codigoPublico: string;
-  plan: PlanDisponibilidad;
-  servicio: Servicio;
+  deposito?: { readonly montoDeposito: number; readonly moneda: string };
+  pagoTarjetaHabilitado: boolean;
+  /** Permite reanudar el conteo desde donde vaya la retención real (14.8),
+   * en vez de siempre arrancar en 30:00. */
+  segundosRestantesIniciales?: number;
   onReportado: () => void;
 }) {
   const [nombrePagador, setNombrePagador] = useState("");
@@ -31,7 +34,7 @@ export function PaymentStep({
   const [referencia, setReferencia] = useState("");
   const [enviando, setEnviando] = useState(false);
   const [iniciandoTarjeta, setIniciandoTarjeta] = useState(false);
-  const [segundosRestantes, setSegundosRestantes] = useState(MINUTOS_RETENCION * 60);
+  const [segundosRestantes, setSegundosRestantes] = useState(segundosRestantesIniciales);
 
   useEffect(() => {
     const id = setInterval(() => setSegundosRestantes((s) => Math.max(0, s - 1)), 1000);
@@ -71,8 +74,6 @@ export function PaymentStep({
     }
   }
 
-  const deposito = plan.disponible ? plan.precio : undefined;
-
   return (
     <Card className="border-none shadow-sm">
       <CardHeader>
@@ -86,7 +87,7 @@ export function PaymentStep({
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
-        {servicio.pagoTarjetaHabilitado && (
+        {pagoTarjetaHabilitado && (
           <>
             <Button type="button" size="lg" variant="outline" className="rounded-2xl" onClick={pagarConTarjeta} disabled={iniciandoTarjeta}>
               <CreditCard data-icon="inline-start" />
