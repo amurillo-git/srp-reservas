@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
-import { crearIntencionSinpeOnvo } from "./pago-sinpe-onvo.service.js";
+import { crearIntencionSaldoOnvo, crearIntencionSinpeOnvo } from "./pago-sinpe-onvo.service.js";
 import { establecerModoSinpe } from "./configuracion-pago.service.js";
 import { FakePrisma, type FilaReserva } from "./testing/fake-prisma.js";
 
@@ -159,5 +159,60 @@ describe("crearIntencionSinpeOnvo", () => {
     const resultado = await crearIntencionSinpeOnvo(comoPrisma(fake), "SRP-0001", DATOS_CLIENTE, { fetchImpl });
     expect(resultado).toEqual({ ok: false, motivo: "ERROR_PROVEEDOR" });
     expect(fake.payments).toHaveLength(0);
+  });
+});
+
+describe("crearIntencionSaldoOnvo", () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  beforeEach(() => {
+    process.env.ONVO_SECRET_KEY = "onvo_test_secret_key_fake";
+  });
+
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+    vi.restoreAllMocks();
+  });
+
+  it("25: crea la intencion por el monto de SALDO (no deposito) sobre una reserva CONFIRMADA", async () => {
+    const fake = new FakePrisma();
+    await establecerModoSinpe(comoPrisma(fake), "ONVO");
+    crearReservaTemporal(fake, { estado: "CONFIRMADA", confirmadaEn: new Date() });
+    const fetchImpl = fetchImplExitoso();
+
+    const resultado = await crearIntencionSaldoOnvo(comoPrisma(fake), "SRP-0001", DATOS_CLIENTE, { fetchImpl });
+
+    expect(resultado).toEqual({ ok: true, numeroSinpe: "+50670196686", monto: 8000, moneda: "CRC" });
+    expect(fake.payments).toHaveLength(1);
+    expect(fake.payments[0]).toMatchObject({
+      reservationId: "res-1", tipo: "SALDO", monto: 8000, moneda: "CRC",
+      metodo: "SINPE_ONVO", estado: "PENDIENTE", onvoPaymentIntentId: "clpiment0001",
+    });
+  });
+
+  it("devuelve ESTADO_INVALIDO si la reserva no esta CONFIRMADA", async () => {
+    const fake = new FakePrisma();
+    await establecerModoSinpe(comoPrisma(fake), "ONVO");
+    crearReservaTemporal(fake, { estado: "TEMPORAL" });
+
+    const resultado = await crearIntencionSaldoOnvo(comoPrisma(fake), "SRP-0001", DATOS_CLIENTE, { fetchImpl: vi.fn() });
+
+    expect(resultado).toEqual({ ok: false, motivo: "ESTADO_INVALIDO" });
+  });
+
+  it("devuelve MODO_INCORRECTO si el modo global sigue en MANUAL", async () => {
+    const fake = new FakePrisma();
+    crearReservaTemporal(fake, { estado: "CONFIRMADA", confirmadaEn: new Date() });
+
+    const resultado = await crearIntencionSaldoOnvo(comoPrisma(fake), "SRP-0001", DATOS_CLIENTE, { fetchImpl: vi.fn() });
+
+    expect(resultado).toEqual({ ok: false, motivo: "MODO_INCORRECTO" });
+  });
+
+  it("devuelve NO_ENCONTRADA si el codigo publico no existe", async () => {
+    const fake = new FakePrisma();
+    await establecerModoSinpe(comoPrisma(fake), "ONVO");
+    const resultado = await crearIntencionSaldoOnvo(comoPrisma(fake), "SRP-9999", DATOS_CLIENTE, { fetchImpl: vi.fn() });
+    expect(resultado).toEqual({ ok: false, motivo: "NO_ENCONTRADA" });
   });
 });

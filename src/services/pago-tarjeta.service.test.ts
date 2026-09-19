@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
-import { crearSesionPago, establecerPagoTarjetaHabilitado, procesarWebhookOnvo } from "./pago-tarjeta.service.js";
+import {
+  crearSesionPago,
+  crearSesionPagoSaldo,
+  establecerPagoTarjetaHabilitado,
+  procesarWebhookOnvo,
+} from "./pago-tarjeta.service.js";
 import { FakePrisma, type FilaReserva } from "./testing/fake-prisma.js";
 
 function comoPrisma(fake: FakePrisma): PrismaClient {
@@ -355,5 +360,82 @@ describe("procesarWebhookOnvo", () => {
     expect(resultado).toEqual({ ok: true });
     expect(fake.reservas[0]!.estado).toBe("TEMPORAL");
     expect(fake.payments.find((p) => p.onvoPaymentIntentId === "clpiment0002")!.estado).toBe("RECHAZADO");
+  });
+
+  it("25: payment-intent.succeeded de un Payment tipo SALDO confirma PAGADA (no CONFIRMADA)", async () => {
+    const fake = new FakePrisma();
+    const reserva = crearReservaTemporal(fake, { estado: "CONFIRMADA", confirmadaEn: new Date() });
+    await fake.payment.create({
+      data: {
+        reservationId: reserva.id, tipo: "SALDO", monto: 8000, moneda: "CRC",
+        metodo: "SINPE_ONVO", estado: "PENDIENTE", onvoPaymentIntentId: "clpiment-saldo-1",
+      },
+    });
+
+    const resultado = await procesarWebhookOnvo(comoPrisma(fake), "webhook_secret_fake", {
+      type: "payment-intent.succeeded",
+      data: { id: "clpiment-saldo-1" },
+    });
+
+    expect(resultado).toEqual({ ok: true });
+    expect(fake.reservas[0]!.estado).toBe("PAGADA");
+    expect(fake.payments.find((p) => p.onvoPaymentIntentId === "clpiment-saldo-1")!.estado).toBe("PAGADO");
+  });
+});
+
+describe("crearSesionPagoSaldo (25: cobro de saldo con tarjeta)", () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  beforeEach(() => {
+    process.env.ONVO_SECRET_KEY = "onvo_test_secret_key_fake";
+    process.env.ONVO_WEBHOOK_SECRET = "webhook_secret_fake";
+    process.env.WEB_APP_URL = "https://reservas.sarapiquiracepark.com";
+  });
+
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+    vi.restoreAllMocks();
+  });
+
+  it("crea la sesion por el monto del SALDO y, cuando ONVO notifica, la reserva pasa a PAGADA", async () => {
+    const fake = new FakePrisma();
+    fake.crearServicio({ id: "svc-1", pagoTarjetaHabilitado: true });
+    crearReservaTemporal(fake, { estado: "CONFIRMADA", confirmadaEn: new Date() });
+
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(init.body as string);
+      expect(body.lineItems).toEqual([
+        { quantity: 1, unitAmount: 800000, currency: "CRC", description: expect.stringContaining("Saldo") },
+      ]);
+      return new Response(JSON.stringify({ id: "clcs-saldo-1", url: "https://checkout.onvopay.com/pay/clcs-saldo-1" }), {
+        status: 201,
+      });
+    });
+
+    const resultado = await crearSesionPagoSaldo(comoPrisma(fake), "SRP-0001", { fetchImpl });
+    expect(resultado).toEqual({ ok: true, checkoutUrl: "https://checkout.onvopay.com/pay/clcs-saldo-1" });
+
+    const webhook = await procesarWebhookOnvo(comoPrisma(fake), "webhook_secret_fake", {
+      type: "checkout-session.succeeded",
+      data: { id: "clcs-saldo-1", paymentStatus: "paid" },
+    });
+    expect(webhook).toEqual({ ok: true });
+    expect(fake.reservas[0]!.estado).toBe("PAGADA");
+  });
+
+  it("devuelve ESTADO_INVALIDO si la reserva no esta CONFIRMADA", async () => {
+    const fake = new FakePrisma();
+    fake.crearServicio({ id: "svc-1", pagoTarjetaHabilitado: true });
+    crearReservaTemporal(fake, { estado: "TEMPORAL" });
+    const resultado = await crearSesionPagoSaldo(comoPrisma(fake), "SRP-0001", { fetchImpl: vi.fn() });
+    expect(resultado).toEqual({ ok: false, motivo: "ESTADO_INVALIDO" });
+  });
+
+  it("devuelve DESHABILITADO si el servicio tiene apagado el pago con tarjeta", async () => {
+    const fake = new FakePrisma();
+    fake.crearServicio({ id: "svc-1", pagoTarjetaHabilitado: false });
+    crearReservaTemporal(fake, { estado: "CONFIRMADA", confirmadaEn: new Date() });
+    const resultado = await crearSesionPagoSaldo(comoPrisma(fake), "SRP-0001", { fetchImpl: vi.fn() });
+    expect(resultado).toEqual({ ok: false, motivo: "DESHABILITADO" });
   });
 });

@@ -48,6 +48,52 @@ export interface DependenciasCrearSesionPago {
   readonly fetchImpl?: typeof fetch;
 }
 
+/** La llamada a la API de Checkout de ONVO es identica para el deposito y el
+ * saldo — solo cambia el monto/descripcion/metadata y, en el llamador, que
+ * hace cada uno con el id de sesion resultante. */
+async function crearSesionCheckoutOnvo(
+  fetchImpl: typeof fetch,
+  monto: number,
+  moneda: string,
+  descripcion: string,
+  metadata: Record<string, string>,
+  clienteEmail: string | null | undefined,
+  urlRetorno: string,
+): Promise<{ readonly ok: true; readonly sesion: { readonly id: string; readonly url: string } } | { readonly ok: false }> {
+  let respuesta: Response;
+  try {
+    respuesta = await fetchImpl(ONVO_CHECKOUT_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.ONVO_SECRET_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        lineItems: [
+          {
+            quantity: 1,
+            // ONVO recibe montos en la unidad menor de la moneda (6.8): x100.
+            unitAmount: Math.round(monto * 100),
+            currency: moneda,
+            description: descripcion,
+          },
+        ],
+        customerEmail: clienteEmail ?? undefined,
+        redirectUrl: urlRetorno,
+        cancelUrl: urlRetorno,
+        metadata,
+      }),
+    });
+  } catch {
+    return { ok: false };
+  }
+
+  if (!respuesta.ok) return { ok: false };
+
+  const sesion = (await respuesta.json()) as { id: string; url: string };
+  return { ok: true, sesion };
+}
+
 /**
  * Crea una sesion de Checkout de ONVO por el monto de deposito de una
  * reserva TEMPORAL (6.8) y guarda su id en la reserva para que
@@ -72,47 +118,71 @@ export async function crearSesionPago(
   }
 
   const urlRetorno = `${process.env.WEB_APP_URL ?? "http://localhost:3001"}/mi-reserva?codigo=${reserva.codigoPublico}`;
-
-  let respuesta: Response;
-  try {
-    respuesta = await fetchImpl(ONVO_CHECKOUT_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.ONVO_SECRET_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        lineItems: [
-          {
-            quantity: 1,
-            // ONVO recibe montos en la unidad menor de la moneda (6.8): x100.
-            unitAmount: Math.round(Number(reserva.montoDeposito) * 100),
-            currency: reserva.moneda,
-            description: `Deposito reserva ${reserva.codigoPublico} - Sarapiqui Race Park`,
-          },
-        ],
-        customerEmail: reserva.clienteEmail ?? undefined,
-        redirectUrl: urlRetorno,
-        cancelUrl: urlRetorno,
-        metadata: { codigoPublico: reserva.codigoPublico },
-      }),
-    });
-  } catch {
-    return { ok: false, motivo: "ERROR_PROVEEDOR" };
-  }
-
-  if (!respuesta.ok) {
-    return { ok: false, motivo: "ERROR_PROVEEDOR" };
-  }
-
-  const sesion = (await respuesta.json()) as { id: string; url: string };
+  const resultado = await crearSesionCheckoutOnvo(
+    fetchImpl,
+    Number(reserva.montoDeposito),
+    reserva.moneda,
+    `Deposito reserva ${reserva.codigoPublico} - Sarapiqui Race Park`,
+    { codigoPublico: reserva.codigoPublico },
+    reserva.clienteEmail,
+    urlRetorno,
+  );
+  if (!resultado.ok) return { ok: false, motivo: "ERROR_PROVEEDOR" };
 
   await prisma.reservation.update({
     where: { id: reserva.id },
-    data: { pagoTarjetaSesionId: sesion.id },
+    data: { pagoTarjetaSesionId: resultado.sesion.id },
   });
 
-  return { ok: true, checkoutUrl: sesion.url };
+  return { ok: true, checkoutUrl: resultado.sesion.url };
+}
+
+/**
+ * Crea una sesion de Checkout de ONVO por el monto de SALDO de una reserva
+ * CONFIRMADA (25, cobro al llegar al Race Park). A diferencia del deposito,
+ * el id de sesion se guarda en el ledger de Payment (no en
+ * Reservation.pagoTarjetaSesionId, que ya esta ocupado por la sesion del
+ * deposito) — procesarWebhookOnvo revisa primero el ledger antes de caer al
+ * comportamiento del deposito.
+ */
+export async function crearSesionPagoSaldo(
+  prisma: PrismaClient,
+  codigoPublico: string,
+  { fetchImpl = fetch }: DependenciasCrearSesionPago = {},
+): Promise<ResultadoCrearSesionPago> {
+  const reserva = await prisma.$transaction((tx) => bloquearYLeerReservaPorCodigo(tx, codigoPublico));
+  if (!reserva) return { ok: false, motivo: "NO_ENCONTRADA" };
+  if (reserva.estado !== "CONFIRMADA") return { ok: false, motivo: "ESTADO_INVALIDO" };
+  const servicio = await prisma.service.findUnique({ where: { id: reserva.servicioId } });
+  if (!servicio?.pagoTarjetaHabilitado) {
+    return { ok: false, motivo: "DESHABILITADO" };
+  }
+
+  const urlRetorno = `${process.env.WEB_APP_URL ?? "http://localhost:3001"}/mi-reserva?codigo=${reserva.codigoPublico}`;
+  const resultado = await crearSesionCheckoutOnvo(
+    fetchImpl,
+    Number(reserva.montoSaldo),
+    reserva.moneda,
+    `Saldo reserva ${reserva.codigoPublico} - Sarapiqui Race Park`,
+    { codigoPublico: reserva.codigoPublico, tipoPago: "SALDO" },
+    reserva.clienteEmail,
+    urlRetorno,
+  );
+  if (!resultado.ok) return { ok: false, motivo: "ERROR_PROVEEDOR" };
+
+  await prisma.payment.create({
+    data: {
+      reservationId: reserva.id,
+      tipo: "SALDO",
+      monto: Number(reserva.montoSaldo),
+      moneda: reserva.moneda,
+      metodo: "TARJETA_ONVO",
+      estado: "PENDIENTE",
+      onvoPaymentIntentId: resultado.sesion.id,
+    },
+  });
+
+  return { ok: true, checkoutUrl: resultado.sesion.url };
 }
 
 export type MotivoRechazoWebhookOnvo = "FIRMA_INVALIDA" | "NO_ENCONTRADA" | "ESTADO_INVALIDO";
@@ -127,6 +197,17 @@ export interface EventoWebhookOnvo {
 }
 
 async function confirmarPorSesionCheckout(prisma: PrismaClient, sesionId: string): Promise<ResultadoWebhookOnvo> {
+  // 25: el cobro de saldo con tarjeta (crearSesionPagoSaldo) ya crea su
+  // Payment PENDIENTE al abrir la sesion, con el id de sesion como
+  // onvoPaymentIntentId (Reservation.pagoTarjetaSesionId ya esta ocupado por
+  // la sesion del deposito). Si existe ese Payment, es un cobro de saldo:
+  // se confirma igual que una intencion de SINPE. Si no existe, es el
+  // deposito (comportamiento original, sin ledger previo).
+  const pagoExistente = await prisma.payment.findUnique({ where: { onvoPaymentIntentId: sesionId } });
+  if (pagoExistente) {
+    return confirmarPorIntencionPago(prisma, sesionId);
+  }
+
   return prisma.$transaction(async (tx) => {
     const reserva = await bloquearYLeerReservaPorSesion(tx, sesionId);
     if (!reserva) return { ok: false, motivo: "NO_ENCONTRADA" };
@@ -183,8 +264,9 @@ async function confirmarPorIntencionPago(prisma: PrismaClient, intencionId: stri
         where: { id: reserva.id },
         data: { estado: "CONFIRMADA", confirmadaEn: pagadoEn },
       });
+    } else if (pago.tipo === "SALDO" && reserva.estado === "CONFIRMADA") {
+      await tx.reservation.update({ where: { id: reserva.id }, data: { estado: "PAGADA" } });
     }
-    // tipo === "SALDO" se maneja en la sub-entrega del flujo de cobro de saldo.
 
     return { ok: true };
   });

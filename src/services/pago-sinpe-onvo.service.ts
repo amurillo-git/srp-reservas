@@ -60,6 +60,78 @@ export interface DependenciasSinpeOnvo {
   readonly fetchImpl?: typeof fetch;
 }
 
+/** Los 3 pasos contra la API de ONVO (crear intencion, crear metodo,
+ * confirmar) son identicos para el deposito y el saldo — solo cambia el
+ * monto/descripcion/metadata y, en el llamador, la validacion de estado de
+ * la reserva. Aislado aca para no repetir las 3 llamadas fetch dos veces. */
+async function crearYConfirmarIntencionOnvo(
+  fetchImpl: typeof fetch,
+  monto: number,
+  moneda: string,
+  descripcion: string,
+  metadata: Record<string, string>,
+  datosCliente: DatosClienteSinpeOnvo,
+): Promise<{ readonly ok: true; readonly intentoId: string } | { readonly ok: false }> {
+  const headers = {
+    Authorization: `Bearer ${process.env.ONVO_SECRET_KEY}`,
+    "Content-Type": "application/json",
+  };
+
+  let intentoRespuesta: Response;
+  try {
+    intentoRespuesta = await fetchImpl(ONVO_PAYMENT_INTENTS_URL, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        // ONVO recibe montos en la unidad menor de la moneda (igual que el
+        // checkout de tarjeta): x100.
+        amount: Math.round(monto * 100),
+        currency: moneda,
+        description: descripcion,
+        metadata,
+      }),
+    });
+  } catch {
+    return { ok: false };
+  }
+  if (!intentoRespuesta.ok) return { ok: false };
+  const intento = (await intentoRespuesta.json()) as { id: string };
+
+  let metodoRespuesta: Response;
+  try {
+    metodoRespuesta = await fetchImpl(ONVO_PAYMENT_METHODS_URL, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        type: "mobile_number",
+        mobileNumber: {
+          identification: datosCliente.cedula,
+          identificationType: datosCliente.tipoIdentificacion ?? 0,
+          number: datosCliente.telefono,
+        },
+      }),
+    });
+  } catch {
+    return { ok: false };
+  }
+  if (!metodoRespuesta.ok) return { ok: false };
+  const metodo = (await metodoRespuesta.json()) as { id: string };
+
+  let confirmarRespuesta: Response;
+  try {
+    confirmarRespuesta = await fetchImpl(`${ONVO_PAYMENT_INTENTS_URL}/${intento.id}/confirm`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ paymentMethodId: metodo.id }),
+    });
+  } catch {
+    return { ok: false };
+  }
+  if (!confirmarRespuesta.ok) return { ok: false };
+
+  return { ok: true, intentoId: intento.id };
+}
+
 /**
  * Crea (y confirma) una intencion de pago SINPE en ONVO por el monto de
  * deposito de una reserva TEMPORAL (25). Solo procede si la configuracion
@@ -82,74 +154,79 @@ export async function crearIntencionSinpeOnvo(
     return { ok: false, motivo: "VENCIDA" };
   }
 
-  const headers = {
-    Authorization: `Bearer ${process.env.ONVO_SECRET_KEY}`,
-    "Content-Type": "application/json",
-  };
-
-  let intentoRespuesta: Response;
-  try {
-    intentoRespuesta = await fetchImpl(ONVO_PAYMENT_INTENTS_URL, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        // ONVO recibe montos en la unidad menor de la moneda (igual que el
-        // checkout de tarjeta): x100.
-        amount: Math.round(Number(reserva.montoDeposito) * 100),
-        currency: reserva.moneda,
-        description: `Deposito reserva ${reserva.codigoPublico} - Sarapiqui Race Park`,
-        metadata: { codigoPublico: reserva.codigoPublico, tipoPago: "DEPOSITO" },
-      }),
-    });
-  } catch {
-    return { ok: false, motivo: "ERROR_PROVEEDOR" };
-  }
-  if (!intentoRespuesta.ok) return { ok: false, motivo: "ERROR_PROVEEDOR" };
-  const intento = (await intentoRespuesta.json()) as { id: string };
-
-  let metodoRespuesta: Response;
-  try {
-    metodoRespuesta = await fetchImpl(ONVO_PAYMENT_METHODS_URL, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        type: "mobile_number",
-        mobileNumber: {
-          identification: datosCliente.cedula,
-          identificationType: datosCliente.tipoIdentificacion ?? 0,
-          number: datosCliente.telefono,
-        },
-      }),
-    });
-  } catch {
-    return { ok: false, motivo: "ERROR_PROVEEDOR" };
-  }
-  if (!metodoRespuesta.ok) return { ok: false, motivo: "ERROR_PROVEEDOR" };
-  const metodo = (await metodoRespuesta.json()) as { id: string };
-
-  let confirmarRespuesta: Response;
-  try {
-    confirmarRespuesta = await fetchImpl(`${ONVO_PAYMENT_INTENTS_URL}/${intento.id}/confirm`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ paymentMethodId: metodo.id }),
-    });
-  } catch {
-    return { ok: false, motivo: "ERROR_PROVEEDOR" };
-  }
-  if (!confirmarRespuesta.ok) return { ok: false, motivo: "ERROR_PROVEEDOR" };
+  const monto = Number(reserva.montoDeposito);
+  const resultado = await crearYConfirmarIntencionOnvo(
+    fetchImpl,
+    monto,
+    reserva.moneda,
+    `Deposito reserva ${reserva.codigoPublico} - Sarapiqui Race Park`,
+    { codigoPublico: reserva.codigoPublico, tipoPago: "DEPOSITO" },
+    datosCliente,
+  );
+  if (!resultado.ok) return { ok: false, motivo: "ERROR_PROVEEDOR" };
 
   await prisma.payment.create({
     data: {
       reservationId: reserva.id,
       tipo: "DEPOSITO",
-      monto: Number(reserva.montoDeposito),
+      monto,
       moneda: reserva.moneda,
       metodo: "SINPE_ONVO",
       estado: "PENDIENTE",
-      onvoPaymentIntentId: intento.id,
+      onvoPaymentIntentId: resultado.intentoId,
     },
   });
 
-  return { ok: true, numeroSinpe: NUMERO_SINPE_ONVO, monto: Number(reserva.montoDeposito), moneda: reserva.moneda };
+  return { ok: true, numeroSinpe: NUMERO_SINPE_ONVO, monto, moneda: reserva.moneda };
+}
+
+export type MotivoRechazoIntencionSaldo = "NO_ENCONTRADA" | "ESTADO_INVALIDO" | "MODO_INCORRECTO" | "ERROR_PROVEEDOR";
+
+export type ResultadoCrearIntencionSaldo =
+  | { readonly ok: true; readonly numeroSinpe: string; readonly monto: number; readonly moneda: string }
+  | { readonly ok: false; readonly motivo: MotivoRechazoIntencionSaldo };
+
+/**
+ * Crea (y confirma) una intencion de pago SINPE en ONVO por el saldo de una
+ * reserva CONFIRMADA (25, cobro al llegar al Race Park). A diferencia del
+ * deposito, no hay plazo de retencion que vencer: la reserva ya esta
+ * confirmada y solo falta cobrar el resto.
+ */
+export async function crearIntencionSaldoOnvo(
+  prisma: PrismaClient,
+  codigoPublico: string,
+  datosCliente: DatosClienteSinpeOnvo,
+  { fetchImpl = fetch }: DependenciasSinpeOnvo = {},
+): Promise<ResultadoCrearIntencionSaldo> {
+  const modo = await obtenerModoSinpe(prisma);
+  if (modo !== "ONVO") return { ok: false, motivo: "MODO_INCORRECTO" };
+
+  const reserva = await prisma.$transaction((tx) => bloquearYLeerReservaPorCodigo(tx, codigoPublico));
+  if (!reserva) return { ok: false, motivo: "NO_ENCONTRADA" };
+  if (reserva.estado !== "CONFIRMADA") return { ok: false, motivo: "ESTADO_INVALIDO" };
+
+  const monto = Number(reserva.montoSaldo);
+  const resultado = await crearYConfirmarIntencionOnvo(
+    fetchImpl,
+    monto,
+    reserva.moneda,
+    `Saldo reserva ${reserva.codigoPublico} - Sarapiqui Race Park`,
+    { codigoPublico: reserva.codigoPublico, tipoPago: "SALDO" },
+    datosCliente,
+  );
+  if (!resultado.ok) return { ok: false, motivo: "ERROR_PROVEEDOR" };
+
+  await prisma.payment.create({
+    data: {
+      reservationId: reserva.id,
+      tipo: "SALDO",
+      monto,
+      moneda: reserva.moneda,
+      metodo: "SINPE_ONVO",
+      estado: "PENDIENTE",
+      onvoPaymentIntentId: resultado.intentoId,
+    },
+  });
+
+  return { ok: true, numeroSinpe: NUMERO_SINPE_ONVO, monto, moneda: reserva.moneda };
 }

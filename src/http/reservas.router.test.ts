@@ -584,6 +584,118 @@ describe("flujo SINPE automatico via ONVO (POST .../sinpe-intent, 25)", () => {
   });
 });
 
+describe("cobro de saldo al llegar al parque (POST /admin/reservations/:code/balance/*, 25)", () => {
+  async function crearReservaConfirmada(fake: FakePrisma, app: Express): Promise<string> {
+    const creacion = await request(app)
+      .post("/api/reservations")
+      .set("Idempotency-Key", `idem-saldo-${Date.now()}-${Math.random()}`)
+      .send({
+        serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "09:00", partySize: 5,
+        customer: { name: "Ana", phone: "8888-0000" },
+      });
+    const codigoPublico: string = creacion.body.codigoPublico;
+    await request(app).post(`/api/reservations/${codigoPublico}/sinpe-evidence`).send({});
+    const auth = await tokenAdminDePrueba(fake);
+    await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/confirm-sinpe`)
+      .set("Authorization", auth);
+    return codigoPublico;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("balance/manual marca la reserva PAGADA y registra auditoria (modo MANUAL, por defecto)", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const codigoPublico = await crearReservaConfirmada(fake, app);
+    const auth = await tokenAdminDePrueba(fake);
+
+    const respuesta = await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/balance/manual`)
+      .set("Authorization", auth);
+
+    expect(respuesta.status).toBe(200);
+    expect(fake.reservas.find((r) => r.codigoPublico === codigoPublico)!.estado).toBe("PAGADA");
+    expect(fake.eventosAuditoria.find((e) => e.accion === "SALDO_COBRADO_MANUAL")).toBeTruthy();
+  });
+
+  it("balance/manual rechaza sin token (401) y con rol sin permiso (403)", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const codigoPublico = await crearReservaConfirmada(fake, app);
+
+    const sinToken = await request(app).post(`/api/admin/reservations/${codigoPublico}/balance/manual`);
+    expect(sinToken.status).toBe(401);
+
+    const authSinPermiso = await tokenAdminDePrueba(fake, "OPERACION");
+    const sinPermiso = await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/balance/manual`)
+      .set("Authorization", authSinPermiso);
+    expect(sinPermiso.status).toBe(403);
+  });
+
+  it("balance/sinpe crea la intencion en ONVO y, cuando notifica, la reserva pasa a PAGADA (modo ONVO)", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+    await request(app).put("/api/admin/configuracion-pago").set("Authorization", auth).send({ modoSinpe: "ONVO" });
+    const codigoPublico = await crearReservaConfirmada(fake, app);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "https://api.onvopay.com/v1/payment-intents") {
+          return new Response(JSON.stringify({ id: "clpiment-saldo-http" }), { status: 201 });
+        }
+        if (url === "https://api.onvopay.com/v1/payment-methods") {
+          return new Response(JSON.stringify({ id: "clpm-saldo-http" }), { status: 201 });
+        }
+        return new Response(JSON.stringify({ id: "clpiment-saldo-http" }), { status: 200 });
+      }),
+    );
+
+    const intencion = await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/balance/sinpe`)
+      .set("Authorization", auth)
+      .send({ telefono: "+50688888888", cedula: "1-1111-1111" });
+    expect(intencion.status).toBe(200);
+    expect(intencion.body.numeroSinpe).toBe("+50670196686");
+
+    const webhook = await request(app)
+      .post("/api/webhooks/onvo")
+      .set("X-Webhook-Secret", "webhook_secret_fake")
+      .send({ type: "payment-intent.succeeded", data: { id: "clpiment-saldo-http" } });
+    expect(webhook.status).toBe(200);
+    expect(fake.reservas.find((r) => r.codigoPublico === codigoPublico)!.estado).toBe("PAGADA");
+  });
+
+  it("balance/card crea la sesion de checkout por el monto del saldo", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    fake.servicios[0]!.pagoTarjetaHabilitado = true;
+    const app = crearApp(comoPrisma(fake));
+    const codigoPublico = await crearReservaConfirmada(fake, app);
+    const auth = await tokenAdminDePrueba(fake);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ id: "clcs-saldo-http", url: "https://checkout.onvopay.com/pay/clcs-saldo-http" }), { status: 201 })),
+    );
+
+    const respuesta = await request(app)
+      .post(`/api/admin/reservations/${codigoPublico}/balance/card`)
+      .set("Authorization", auth);
+
+    expect(respuesta.status).toBe(200);
+    expect(respuesta.body.checkoutUrl).toBe("https://checkout.onvopay.com/pay/clcs-saldo-http");
+  });
+});
+
 describe("/api/admin/reports (25)", () => {
   function crearReservaEnFake(fake: FakePrisma, id: string, fecha: Date, estado: string) {
     fake.reservas.push({

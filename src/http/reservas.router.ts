@@ -19,9 +19,15 @@ import {
   listarServiciosActivos,
 } from "../services/availability.service.js";
 import { aprobarSinpe, rechazarSinpe, reportarComprobanteSinpe } from "../services/pagos.service.js";
-import { crearSesionPago, establecerPagoTarjetaHabilitado, procesarWebhookOnvo } from "../services/pago-tarjeta.service.js";
-import { crearIntencionSinpeOnvo } from "../services/pago-sinpe-onvo.service.js";
+import {
+  crearSesionPago,
+  crearSesionPagoSaldo,
+  establecerPagoTarjetaHabilitado,
+  procesarWebhookOnvo,
+} from "../services/pago-tarjeta.service.js";
+import { crearIntencionSaldoOnvo, crearIntencionSinpeOnvo } from "../services/pago-sinpe-onvo.service.js";
 import { establecerModoSinpe, obtenerModoSinpe } from "../services/configuracion-pago.service.js";
+import { marcarSaldoPagadoManual } from "../services/cobro-saldo.service.js";
 import { iniciarSesion } from "../services/auth.service.js";
 import { requireAuth, type RequestAutenticado } from "./auth.middleware.js";
 import { listarEventos, registrarEvento, type ActorAuditoria } from "../services/auditoria.service.js";
@@ -1049,6 +1055,69 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
         valoresAnteriores: { modoSinpe: anterior }, valoresNuevos: { modoSinpe },
       });
       res.status(200).json({ ok: true });
+    }),
+  );
+
+  // 25: cobro de saldo al llegar al Race Park, iniciado por el staff desde
+  // el panel (no por el cliente): por eso vive bajo /admin y usa los mismos
+  // roles que validan SINPE (manejan dinero).
+  router.post(
+    "/admin/reservations/:publicCode/balance/manual",
+    requireAuth(ROLES_VALIDAN_SINPE),
+    conManejoDeErrores(async (req, res) => {
+      const resultado = await marcarSaldoPagadoManual(prisma, req.params.publicCode!);
+      if (resultado.ok) {
+        await registrarEvento(prisma, actorDesde(req), {
+          accion: "SALDO_COBRADO_MANUAL", objetoTipo: "RESERVA", objetoId: req.params.publicCode!,
+        });
+        res.status(200).json({ ok: true });
+        return;
+      }
+      const status = resultado.motivo === "NO_ENCONTRADA" ? 404 : resultado.motivo === "MODO_INCORRECTO" ? 400 : 409;
+      enviarError(res, status, resultado.motivo);
+    }),
+  );
+
+  router.post(
+    "/admin/reservations/:publicCode/balance/sinpe",
+    requireAuth(ROLES_VALIDAN_SINPE),
+    conManejoDeErrores(async (req, res) => {
+      const { telefono, cedula } = req.body ?? {};
+      if (typeof telefono !== "string" || telefono.length === 0) {
+        return enviarError(res, 400, "telefono es requerido");
+      }
+      if (typeof cedula !== "string" || cedula.length === 0) {
+        return enviarError(res, 400, "cedula es requerida");
+      }
+
+      const resultado = await crearIntencionSaldoOnvo(prisma, req.params.publicCode!, { telefono, cedula });
+      if (resultado.ok) {
+        res.status(200).json({ numeroSinpe: resultado.numeroSinpe, monto: resultado.monto, moneda: resultado.moneda });
+        return;
+      }
+      const status =
+        resultado.motivo === "NO_ENCONTRADA"
+          ? 404
+          : resultado.motivo === "ERROR_PROVEEDOR"
+            ? 502
+            : resultado.motivo === "MODO_INCORRECTO"
+              ? 400
+              : 409;
+      enviarError(res, status, resultado.motivo);
+    }),
+  );
+
+  router.post(
+    "/admin/reservations/:publicCode/balance/card",
+    requireAuth(ROLES_VALIDAN_SINPE),
+    conManejoDeErrores(async (req, res) => {
+      const resultado = await crearSesionPagoSaldo(prisma, req.params.publicCode!);
+      if (resultado.ok) {
+        res.status(200).json({ checkoutUrl: resultado.checkoutUrl });
+        return;
+      }
+      const status = resultado.motivo === "NO_ENCONTRADA" ? 404 : resultado.motivo === "ERROR_PROVEEDOR" ? 502 : 409;
+      enviarError(res, status, resultado.motivo);
     }),
   );
 

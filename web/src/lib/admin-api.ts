@@ -239,6 +239,8 @@ export interface ReservaBusqueda {
   readonly clienteTelefono: string;
   readonly estado: string;
   readonly vecesReprogramada: number;
+  readonly montoSaldo: number;
+  readonly moneda: string;
 }
 
 export interface FiltrosBusquedaReservas {
@@ -510,4 +512,55 @@ export async function actualizarConfiguracionPagoAdmin(
   );
   if (status === 200) return { ok: true };
   return { ok: false, motivo: cuerpo.motivo ?? cuerpo.error ?? "No se pudo actualizar la configuracion" };
+}
+
+// ----------------------------------------------------------------------------
+// Cobro de saldo al llegar al Race Park (25).
+// ----------------------------------------------------------------------------
+
+export async function marcarSaldoManualAdmin(token: string, codigoPublico: string): Promise<ResultadoAccionSimple> {
+  const { status, datos: cuerpo } = await enviarJsonAdmin<{ motivo?: string; error?: string }>(
+    "POST",
+    `/admin/reservations/${codigoPublico}/balance/manual`,
+    token,
+  );
+  if (status === 200) return { ok: true };
+  return { ok: false, motivo: cuerpo.motivo ?? cuerpo.error ?? "No se pudo cobrar el saldo" };
+}
+
+export type ResultadoIniciarSaldoSinpe =
+  | { readonly ok: true; readonly numeroSinpe: string; readonly monto: number; readonly moneda: string }
+  | { readonly ok: false; readonly motivo: string };
+
+export async function iniciarSaldoSinpeAdmin(
+  token: string,
+  codigoPublico: string,
+  datos: { telefono: string; cedula: string },
+): Promise<ResultadoIniciarSaldoSinpe> {
+  const { status, datos: cuerpo } = await enviarJsonAdmin<{
+    numeroSinpe?: string; monto?: number; moneda?: string; motivo?: string; error?: string;
+  }>("POST", `/admin/reservations/${codigoPublico}/balance/sinpe`, token, datos);
+  if (status === 200 && cuerpo.numeroSinpe && cuerpo.moneda) {
+    return { ok: true, numeroSinpe: cuerpo.numeroSinpe, monto: cuerpo.monto ?? 0, moneda: cuerpo.moneda };
+  }
+  return { ok: false, motivo: cuerpo.motivo ?? cuerpo.error ?? "No se pudo iniciar el pago SINPE" };
+}
+
+export type ResultadoIniciarSaldoTarjeta =
+  | { readonly ok: true; readonly checkoutUrl: string }
+  | { readonly ok: false; readonly motivo: string };
+
+export async function iniciarSaldoTarjetaAdmin(
+  token: string,
+  codigoPublico: string,
+): Promise<ResultadoIniciarSaldoTarjeta> {
+  const { status, datos: cuerpo } = await enviarJsonAdmin<{ checkoutUrl?: string; motivo?: string; error?: string }>(
+    "POST",
+    `/admin/reservations/${codigoPublico}/balance/card`,
+    token,
+  );
+  if (status === 200 && cuerpo.checkoutUrl) {
+    return { ok: true, checkoutUrl: cuerpo.checkoutUrl };
+  }
+  return { ok: false, motivo: cuerpo.motivo ?? cuerpo.error ?? "No se pudo iniciar el pago con tarjeta" };
 }

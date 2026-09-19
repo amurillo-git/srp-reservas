@@ -183,6 +183,10 @@ export interface FiltrosBusquedaReservas {
 export interface ReservaBusqueda extends ReservaResumen {
   readonly estado: string;
   readonly vecesReprogramada: number;
+  /** 25: para que el panel pueda mostrar/gatillar "Cobrar saldo" sin una
+   * segunda consulta. */
+  readonly montoSaldo: number;
+  readonly moneda: string;
 }
 
 /** Tope duro de resultados (14.5): esta pantalla es para encontrar UNA
@@ -228,6 +232,8 @@ export async function buscarReservas(
     ...comoResumen(reserva),
     estado: reserva.estado,
     vecesReprogramada: reserva.vecesReprogramada ?? 0,
+    montoSaldo: Number(reserva.montoSaldo),
+    moneda: reserva.moneda,
   }));
 }
 
