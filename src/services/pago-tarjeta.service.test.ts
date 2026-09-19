@@ -285,4 +285,75 @@ describe("procesarWebhookOnvo", () => {
     });
     expect(resultado).toEqual({ ok: false, motivo: "NO_ENCONTRADA" });
   });
+
+  it("25: payment-intent.succeeded confirma la reserva TEMPORAL y marca el Payment como PAGADO", async () => {
+    const fake = new FakePrisma();
+    const reserva = crearReservaTemporal(fake);
+    await fake.payment.create({
+      data: {
+        reservationId: reserva.id, tipo: "DEPOSITO", monto: 8000, moneda: "CRC",
+        metodo: "SINPE_ONVO", estado: "PENDIENTE", onvoPaymentIntentId: "clpiment0001",
+      },
+    });
+
+    const resultado = await procesarWebhookOnvo(comoPrisma(fake), "webhook_secret_fake", {
+      type: "payment-intent.succeeded",
+      data: { id: "clpiment0001" },
+    });
+
+    expect(resultado).toEqual({ ok: true });
+    expect(fake.reservas[0]!.estado).toBe("CONFIRMADA");
+    expect(fake.reservas[0]!.confirmadaEn).toBeInstanceOf(Date);
+    const pago = fake.payments.find((p) => p.onvoPaymentIntentId === "clpiment0001")!;
+    expect(pago.estado).toBe("PAGADO");
+    expect(pago.pagadoEn).toBeInstanceOf(Date);
+  });
+
+  it("25: payment-intent.succeeded es idempotente si el Payment ya estaba PAGADO", async () => {
+    const fake = new FakePrisma();
+    const reserva = crearReservaTemporal(fake, { estado: "CONFIRMADA", confirmadaEn: new Date(0) });
+    await fake.payment.create({
+      data: {
+        reservationId: reserva.id, tipo: "DEPOSITO", monto: 8000, moneda: "CRC",
+        metodo: "SINPE_ONVO", estado: "PAGADO", onvoPaymentIntentId: "clpiment0001", pagadoEn: new Date(0),
+      },
+    });
+
+    const resultado = await procesarWebhookOnvo(comoPrisma(fake), "webhook_secret_fake", {
+      type: "payment-intent.succeeded",
+      data: { id: "clpiment0001" },
+    });
+
+    expect(resultado).toEqual({ ok: true });
+    expect(fake.reservas[0]!.confirmadaEn).toEqual(new Date(0));
+  });
+
+  it("25: devuelve NO_ENCONTRADA si ningun Payment tiene esa intencion", async () => {
+    const fake = new FakePrisma();
+    const resultado = await procesarWebhookOnvo(comoPrisma(fake), "webhook_secret_fake", {
+      type: "payment-intent.succeeded",
+      data: { id: "clpiment-inexistente" },
+    });
+    expect(resultado).toEqual({ ok: false, motivo: "NO_ENCONTRADA" });
+  });
+
+  it("25: payment-intent.failed marca el Payment como RECHAZADO sin tocar la reserva", async () => {
+    const fake = new FakePrisma();
+    const reserva = crearReservaTemporal(fake);
+    await fake.payment.create({
+      data: {
+        reservationId: reserva.id, tipo: "DEPOSITO", monto: 8000, moneda: "CRC",
+        metodo: "SINPE_ONVO", estado: "PENDIENTE", onvoPaymentIntentId: "clpiment0002",
+      },
+    });
+
+    const resultado = await procesarWebhookOnvo(comoPrisma(fake), "webhook_secret_fake", {
+      type: "payment-intent.failed",
+      data: { id: "clpiment0002" },
+    });
+
+    expect(resultado).toEqual({ ok: true });
+    expect(fake.reservas[0]!.estado).toBe("TEMPORAL");
+    expect(fake.payments.find((p) => p.onvoPaymentIntentId === "clpiment0002")!.estado).toBe("RECHAZADO");
+  });
 });

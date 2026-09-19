@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
-import { listarServicios } from "@/lib/api";
+import { listarServicios, obtenerConfiguracionPago, type ModoSinpe } from "@/lib/api";
 import type { Servicio } from "@/lib/types";
 import type { EstadoWizard, PasoReserva } from "./types";
 import { PartySizeStep } from "./steps/party-size-step";
@@ -41,6 +41,7 @@ export function BookingWizard() {
   const [servicio, setServicio] = useState<Servicio | null | undefined>(undefined);
   const [paso, setPaso] = useState<PasoReserva>("personas");
   const [estado, setEstado] = useState<EstadoWizard | null>(null);
+  const [modoSinpe, setModoSinpe] = useState<ModoSinpe>("MANUAL");
 
   useEffect(() => {
     listarServicios()
@@ -52,6 +53,7 @@ export function BookingWizard() {
         toast.error("No pudimos conectar con el sistema de reservas.");
         setServicio(null);
       });
+    obtenerConfiguracionPago().then(({ modoSinpe }) => setModoSinpe(modoSinpe));
   }, []);
 
   if (servicio === null) {
@@ -143,6 +145,7 @@ export function BookingWizard() {
           codigoPublico={estado.codigoPublico}
           deposito={estado.plan.disponible ? estado.plan.precio : undefined}
           pagoTarjetaHabilitado={servicio.pagoTarjetaHabilitado}
+          modoSinpe={modoSinpe}
           onReportado={() => setPaso("confirmacion")}
         />
       )}

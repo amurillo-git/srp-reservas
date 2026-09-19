@@ -486,3 +486,28 @@ export async function actualizarPagoTarjetaAdmin(
   if (status === 200) return { ok: true };
   return { ok: false, motivo: cuerpo.motivo ?? cuerpo.error ?? "No se pudo actualizar el pago con tarjeta" };
 }
+
+// ----------------------------------------------------------------------------
+// Configuracion de pagos (25): switch global SINPE manual/ONVO.
+// ----------------------------------------------------------------------------
+
+export type ModoSinpe = "MANUAL" | "ONVO";
+
+export async function obtenerConfiguracionPagoAdmin(token: string): Promise<ModoSinpe> {
+  const { modoSinpe } = await obtenerJsonAdmin<{ modoSinpe: ModoSinpe }>("/admin/configuracion-pago", token);
+  return modoSinpe;
+}
+
+export async function actualizarConfiguracionPagoAdmin(
+  token: string,
+  modoSinpe: ModoSinpe,
+): Promise<ResultadoAccionSimple> {
+  const { status, datos: cuerpo } = await enviarJsonAdmin<{ motivo?: string; error?: string }>(
+    "PUT",
+    "/admin/configuracion-pago",
+    token,
+    { modoSinpe },
+  );
+  if (status === 200) return { ok: true };
+  return { ok: false, motivo: cuerpo.motivo ?? cuerpo.error ?? "No se pudo actualizar la configuracion" };
+}

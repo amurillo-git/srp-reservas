@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { formatoFechaLarga, formatoMoneda } from "@/lib/format";
-import { consultarReserva } from "@/lib/api";
+import { consultarReserva, obtenerConfiguracionPago, type ModoSinpe } from "@/lib/api";
 import type { ReservaPublica } from "@/lib/types";
 import { PaymentStep } from "./steps/payment-step";
 
@@ -35,6 +35,11 @@ export function ReservationLookup() {
   const [codigo, setCodigo] = useState(searchParams.get("codigo") ?? "");
   const [reserva, setReserva] = useState<ReservaPublica | null | undefined>(undefined);
   const [buscando, setBuscando] = useState(false);
+  const [modoSinpe, setModoSinpe] = useState<ModoSinpe>("MANUAL");
+
+  useEffect(() => {
+    obtenerConfiguracionPago().then(({ modoSinpe }) => setModoSinpe(modoSinpe));
+  }, []);
 
   async function buscar(codigoBuscado: string) {
     if (codigoBuscado.trim().length === 0) return;
@@ -147,6 +152,7 @@ export function ReservationLookup() {
           codigoPublico={reserva.codigoPublico}
           deposito={{ montoDeposito: reserva.montoDeposito, moneda: reserva.moneda }}
           pagoTarjetaHabilitado={reserva.pagoTarjetaHabilitado}
+          modoSinpe={modoSinpe}
           segundosRestantesIniciales={segundosHastaExpirar(reserva.expiraEn)}
           onReportado={() => buscar(reserva.codigoPublico)}
         />

@@ -123,6 +123,39 @@ export async function iniciarPagoTarjeta(codigoPublico: string): Promise<Resulta
   return { ok: true, checkoutUrl: cuerpo.checkoutUrl };
 }
 
+export type ModoSinpe = "MANUAL" | "ONVO";
+
+export async function obtenerConfiguracionPago(): Promise<{ readonly modoSinpe: ModoSinpe }> {
+  return obtenerJson<{ modoSinpe: ModoSinpe }>("/configuracion-pago");
+}
+
+export interface DatosClienteSinpeOnvo {
+  readonly telefono: string;
+  readonly cedula: string;
+}
+
+export type ResultadoIniciarIntencionSinpe =
+  | { readonly ok: true; readonly numeroSinpe: string; readonly monto: number; readonly moneda: string }
+  | { readonly ok: false; readonly error: string };
+
+/** 25: crea la intencion de pago SINPE en ONVO (modo automatico) para el
+ * deposito de una reserva TEMPORAL. */
+export async function iniciarIntencionSinpe(
+  codigoPublico: string,
+  datos: DatosClienteSinpeOnvo,
+): Promise<ResultadoIniciarIntencionSinpe> {
+  const respuesta = await fetch(`${BASE_URL}/reservations/${codigoPublico}/sinpe-intent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(datos),
+  });
+  const cuerpo = await respuesta.json().catch(() => ({}));
+  if (!respuesta.ok) {
+    return { ok: false, error: cuerpo.error ?? "No se pudo iniciar el pago SINPE" };
+  }
+  return { ok: true, numeroSinpe: cuerpo.numeroSinpe, monto: cuerpo.monto, moneda: cuerpo.moneda };
+}
+
 export async function consultarReserva(codigoPublico: string): Promise<ReservaPublica | null> {
   const respuesta = await fetch(`${BASE_URL}/reservations/${encodeURIComponent(codigoPublico)}`);
   if (respuesta.status === 404) return null;

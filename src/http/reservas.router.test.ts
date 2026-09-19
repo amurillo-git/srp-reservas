@@ -465,6 +465,125 @@ describe("flujo de pago con tarjeta (POST .../card-payment, POST /webhooks/onvo)
   });
 });
 
+describe("configuracion-pago (25): switch global SINPE manual/ONVO", () => {
+  it("GET /api/configuracion-pago devuelve MANUAL por defecto (publica, sin auth)", async () => {
+    const app = crearApp(comoPrisma(new FakePrisma()));
+    const respuesta = await request(app).get("/api/configuracion-pago");
+    expect(respuesta.status).toBe(200);
+    expect(respuesta.body).toEqual({ modoSinpe: "MANUAL" });
+  });
+
+  it("GET/PUT /api/admin/configuracion-pago requieren auth y registran auditoria", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+
+    const sinToken = await request(app).get("/api/admin/configuracion-pago");
+    expect(sinToken.status).toBe(401);
+
+    const auth = await tokenAdminDePrueba(fake);
+    const cambio = await request(app)
+      .put("/api/admin/configuracion-pago")
+      .set("Authorization", auth)
+      .send({ modoSinpe: "ONVO" });
+    expect(cambio.status).toBe(200);
+
+    const lectura = await request(app).get("/api/admin/configuracion-pago").set("Authorization", auth);
+    expect(lectura.body).toEqual({ modoSinpe: "ONVO" });
+
+    const evento = fake.eventosAuditoria.find((e) => e.accion === "MODO_SINPE_ACTUALIZADO");
+    expect(evento?.valoresAnteriores).toEqual({ modoSinpe: "MANUAL" });
+    expect(evento?.valoresNuevos).toEqual({ modoSinpe: "ONVO" });
+  });
+
+  it("PUT /api/admin/configuracion-pago valida el valor de modoSinpe", async () => {
+    const fake = new FakePrisma();
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+
+    const respuesta = await request(app)
+      .put("/api/admin/configuracion-pago")
+      .set("Authorization", auth)
+      .send({ modoSinpe: "OTRO" });
+    expect(respuesta.status).toBe(400);
+  });
+});
+
+describe("flujo SINPE automatico via ONVO (POST .../sinpe-intent, 25)", () => {
+  async function crearReservaTemporal(app: Express): Promise<string> {
+    const creacion = await request(app)
+      .post("/api/reservations")
+      .set("Idempotency-Key", `idem-sinpe-onvo-${Date.now()}-${Math.random()}`)
+      .send({
+        serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "09:00", partySize: 5,
+        customer: { name: "Ana", phone: "8888-0000" },
+      });
+    return creacion.body.codigoPublico as string;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("crea la intencion en ONVO y, cuando notifica el pago, confirma la reserva", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const auth = await tokenAdminDePrueba(fake);
+    await request(app).put("/api/admin/configuracion-pago").set("Authorization", auth).send({ modoSinpe: "ONVO" });
+    const codigoPublico = await crearReservaTemporal(app);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "https://api.onvopay.com/v1/payment-intents") {
+          return new Response(JSON.stringify({ id: "clpiment0001" }), { status: 201 });
+        }
+        if (url === "https://api.onvopay.com/v1/payment-methods") {
+          return new Response(JSON.stringify({ id: "clpm0001" }), { status: 201 });
+        }
+        return new Response(JSON.stringify({ id: "clpiment0001" }), { status: 200 });
+      }),
+    );
+
+    const intencion = await request(app)
+      .post(`/api/reservations/${codigoPublico}/sinpe-intent`)
+      .send({ telefono: "+50688888888", cedula: "1-1111-1111" });
+    expect(intencion.status).toBe(200);
+    expect(intencion.body).toEqual({ numeroSinpe: "+50670196686", monto: expect.any(Number), moneda: "CRC" });
+    expect(fake.reservas.find((r) => r.codigoPublico === codigoPublico)!.estado).toBe("TEMPORAL");
+
+    const webhook = await request(app)
+      .post("/api/webhooks/onvo")
+      .set("X-Webhook-Secret", "webhook_secret_fake")
+      .send({ type: "payment-intent.succeeded", data: { id: "clpiment0001" } });
+    expect(webhook.status).toBe(200);
+    expect(fake.reservas.find((r) => r.codigoPublico === codigoPublico)!.estado).toBe("CONFIRMADA");
+  });
+
+  it("devuelve 400 si el modo global sigue en MANUAL", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const codigoPublico = await crearReservaTemporal(app);
+
+    const respuesta = await request(app)
+      .post(`/api/reservations/${codigoPublico}/sinpe-intent`)
+      .send({ telefono: "+50688888888", cedula: "1-1111-1111" });
+    expect(respuesta.status).toBe(400);
+    expect(respuesta.body.error).toBe("MODO_INCORRECTO");
+  });
+
+  it("valida que telefono y cedula sean requeridos", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const codigoPublico = await crearReservaTemporal(app);
+
+    const respuesta = await request(app).post(`/api/reservations/${codigoPublico}/sinpe-intent`).send({});
+    expect(respuesta.status).toBe(400);
+  });
+});
+
 describe("/api/admin/reports (25)", () => {
   function crearReservaEnFake(fake: FakePrisma, id: string, fecha: Date, estado: string) {
     fake.reservas.push({

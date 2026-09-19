@@ -20,6 +20,8 @@ import {
 } from "../services/availability.service.js";
 import { aprobarSinpe, rechazarSinpe, reportarComprobanteSinpe } from "../services/pagos.service.js";
 import { crearSesionPago, establecerPagoTarjetaHabilitado, procesarWebhookOnvo } from "../services/pago-tarjeta.service.js";
+import { crearIntencionSinpeOnvo } from "../services/pago-sinpe-onvo.service.js";
+import { establecerModoSinpe, obtenerModoSinpe } from "../services/configuracion-pago.service.js";
 import { iniciarSesion } from "../services/auth.service.js";
 import { requireAuth, type RequestAutenticado } from "./auth.middleware.js";
 import { listarEventos, registrarEvento, type ActorAuditoria } from "../services/auditoria.service.js";
@@ -306,6 +308,45 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
         return;
       }
       const status = resultado.motivo === "NO_ENCONTRADA" ? 404 : 409;
+      enviarError(res, status, resultado.motivo);
+    }),
+  );
+
+  // 25: para que el cliente sepa si debe reportar comprobante manualmente o
+  // seguir el flujo automatico de ONVO. Publica: no expone nada sensible.
+  router.get(
+    "/configuracion-pago",
+    conManejoDeErrores(async (_req, res) => {
+      res.json({ modoSinpe: await obtenerModoSinpe(prisma) });
+    }),
+  );
+
+  // 25: crea (y confirma) una intencion de pago SINPE en ONVO por el deposito
+  // de una reserva TEMPORAL. Solo tiene efecto si el modo global es ONVO.
+  router.post(
+    "/reservations/:publicCode/sinpe-intent",
+    conManejoDeErrores(async (req, res) => {
+      const { telefono, cedula } = req.body ?? {};
+      if (typeof telefono !== "string" || telefono.length === 0) {
+        return enviarError(res, 400, "telefono es requerido");
+      }
+      if (typeof cedula !== "string" || cedula.length === 0) {
+        return enviarError(res, 400, "cedula es requerida");
+      }
+
+      const resultado = await crearIntencionSinpeOnvo(prisma, req.params.publicCode!, { telefono, cedula });
+      if (resultado.ok) {
+        res.status(200).json({ numeroSinpe: resultado.numeroSinpe, monto: resultado.monto, moneda: resultado.moneda });
+        return;
+      }
+      const status =
+        resultado.motivo === "NO_ENCONTRADA"
+          ? 404
+          : resultado.motivo === "ERROR_PROVEEDOR"
+            ? 502
+            : resultado.motivo === "MODO_INCORRECTO"
+              ? 400
+              : 409;
       enviarError(res, status, resultado.motivo);
     }),
   );
@@ -980,6 +1021,34 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
       }
       const status = resultado.motivo === "SERVICIO_NO_ENCONTRADO" ? 404 : 400;
       enviarError(res, status, resultado.motivo);
+    }),
+  );
+
+  // 25, 14.7: switch global MANUAL/ONVO para la deteccion de pagos SINPE.
+  router.get(
+    "/admin/configuracion-pago",
+    requireAuth(ROLES_GESTIONAN_PAGOS),
+    conManejoDeErrores(async (_req, res) => {
+      res.json({ modoSinpe: await obtenerModoSinpe(prisma) });
+    }),
+  );
+
+  router.put(
+    "/admin/configuracion-pago",
+    requireAuth(ROLES_GESTIONAN_PAGOS),
+    conManejoDeErrores(async (req, res) => {
+      const { modoSinpe } = req.body ?? {};
+      if (modoSinpe !== "MANUAL" && modoSinpe !== "ONVO") {
+        return enviarError(res, 400, "modoSinpe debe ser MANUAL u ONVO");
+      }
+
+      const anterior = await obtenerModoSinpe(prisma);
+      await establecerModoSinpe(prisma, modoSinpe);
+      await registrarEvento(prisma, actorDesde(req), {
+        accion: "MODO_SINPE_ACTUALIZADO", objetoTipo: "CONFIGURACION_PAGO", objetoId: "singleton",
+        valoresAnteriores: { modoSinpe: anterior }, valoresNuevos: { modoSinpe },
+      });
+      res.status(200).json({ ok: true });
     }),
   );
 

@@ -126,30 +126,9 @@ export interface EventoWebhookOnvo {
   readonly data: { readonly id: string; readonly paymentStatus?: string };
 }
 
-/**
- * Procesa un webhook de ONVO (6.8). Solo actua sobre
- * `checkout-session.succeeded` con `data.paymentStatus === "paid"`;
- * cualquier otro evento se acepta sin efecto (para que ONVO no lo reintente
- * indefinidamente). Idempotente: una reserva ya CONFIRMADA no se reprocesa
- * ni falla, y una reserva ya terminal (EXPIRADA/CANCELADA/RECHAZADA) nunca
- * se resucita.
- */
-export async function procesarWebhookOnvo(
-  prisma: PrismaClient,
-  headerSecretRecibido: string | undefined,
-  evento: EventoWebhookOnvo,
-): Promise<ResultadoWebhookOnvo> {
-  const secretoEsperado = process.env.ONVO_WEBHOOK_SECRET;
-  if (!secretoEsperado || headerSecretRecibido !== secretoEsperado) {
-    return { ok: false, motivo: "FIRMA_INVALIDA" };
-  }
-
-  if (evento.type !== "checkout-session.succeeded" || evento.data.paymentStatus !== "paid") {
-    return { ok: true };
-  }
-
+async function confirmarPorSesionCheckout(prisma: PrismaClient, sesionId: string): Promise<ResultadoWebhookOnvo> {
   return prisma.$transaction(async (tx) => {
-    const reserva = await bloquearYLeerReservaPorSesion(tx, evento.data.id);
+    const reserva = await bloquearYLeerReservaPorSesion(tx, sesionId);
     if (!reserva) return { ok: false, motivo: "NO_ENCONTRADA" };
     if (reserva.estado === "CONFIRMADA") return { ok: true };
     if (reserva.estado !== "TEMPORAL") return { ok: false, motivo: "ESTADO_INVALIDO" };
@@ -169,12 +148,95 @@ export async function procesarWebhookOnvo(
         moneda: reserva.moneda,
         metodo: "TARJETA_ONVO",
         estado: "PAGADO",
-        onvoPaymentIntentId: evento.data.id,
+        onvoPaymentIntentId: sesionId,
         pagadoEn: confirmadaEn,
       },
     });
     return { ok: true };
   });
+}
+
+/**
+ * Confirma un Payment (deposito, SINPE via ONVO) por el id de su
+ * PaymentIntent (25). A diferencia del checkout de tarjeta, el Payment ya
+ * existe en estado PENDIENTE (creado por crearIntencionSinpeOnvo); este
+ * webhook solo lo marca PAGADO y, si la reserva sigue TEMPORAL, la confirma.
+ * Idempotente: un Payment ya PAGADO no se reprocesa.
+ */
+async function confirmarPorIntencionPago(prisma: PrismaClient, intencionId: string): Promise<ResultadoWebhookOnvo> {
+  return prisma.$transaction(async (tx) => {
+    const pago = await tx.payment.findUnique({ where: { onvoPaymentIntentId: intencionId } });
+    if (!pago) return { ok: false, motivo: "NO_ENCONTRADA" };
+    if (pago.estado === "PAGADO") return { ok: true };
+
+    const previa = await tx.reservation.findUnique({ where: { id: pago.reservationId } });
+    if (!previa) return { ok: false, motivo: "NO_ENCONTRADA" };
+    await tx.$queryRaw`SELECT id FROM "reservations" WHERE id = ${previa.id} FOR UPDATE`;
+    const reserva = await tx.reservation.findUnique({ where: { id: previa.id } });
+    if (!reserva) return { ok: false, motivo: "NO_ENCONTRADA" };
+
+    const pagadoEn = new Date();
+    await tx.payment.update({ where: { id: pago.id }, data: { estado: "PAGADO", pagadoEn } });
+
+    if (pago.tipo === "DEPOSITO" && reserva.estado === "TEMPORAL") {
+      await tx.reservation.update({
+        where: { id: reserva.id },
+        data: { estado: "CONFIRMADA", confirmadaEn: pagadoEn },
+      });
+    }
+    // tipo === "SALDO" se maneja en la sub-entrega del flujo de cobro de saldo.
+
+    return { ok: true };
+  });
+}
+
+/** Marca RECHAZADO un Payment cuya intencion de ONVO fallo (25). No toca la
+ * reserva: el cliente puede seguir intentando dentro de su plazo de
+ * retencion (mismo criterio que un comprobante SINPE manual rechazado no
+ * cancela la reserva por si solo). */
+async function marcarIntencionRechazada(prisma: PrismaClient, intencionId: string): Promise<void> {
+  const pago = await prisma.payment.findUnique({ where: { onvoPaymentIntentId: intencionId } });
+  if (pago && pago.estado === "PENDIENTE") {
+    await prisma.payment.update({ where: { id: pago.id }, data: { estado: "RECHAZADO" } });
+  }
+}
+
+/**
+ * Procesa un webhook de ONVO (6.8, 25). Actua sobre:
+ * - `checkout-session.succeeded` con `data.paymentStatus === "paid"` (pago
+ *   con tarjeta).
+ * - `payment-intent.succeeded` (SINPE automatico via ONVO).
+ * - `payment-intent.failed` (marca el Payment como RECHAZADO).
+ * Cualquier otro evento (incluido `payment-intent.deferred`, que solo indica
+ * que ONVO sigue esperando la transferencia) se acepta sin efecto, para que
+ * ONVO no lo reintente indefinidamente. Idempotente: una reserva/Payment ya
+ * confirmados no se reprocesan, y una reserva ya terminal
+ * (EXPIRADA/CANCELADA/RECHAZADA) nunca se resucita.
+ */
+export async function procesarWebhookOnvo(
+  prisma: PrismaClient,
+  headerSecretRecibido: string | undefined,
+  evento: EventoWebhookOnvo,
+): Promise<ResultadoWebhookOnvo> {
+  const secretoEsperado = process.env.ONVO_WEBHOOK_SECRET;
+  if (!secretoEsperado || headerSecretRecibido !== secretoEsperado) {
+    return { ok: false, motivo: "FIRMA_INVALIDA" };
+  }
+
+  if (evento.type === "checkout-session.succeeded" && evento.data.paymentStatus === "paid") {
+    return confirmarPorSesionCheckout(prisma, evento.data.id);
+  }
+
+  if (evento.type === "payment-intent.succeeded") {
+    return confirmarPorIntencionPago(prisma, evento.data.id);
+  }
+
+  if (evento.type === "payment-intent.failed") {
+    await marcarIntencionRechazada(prisma, evento.data.id);
+    return { ok: true };
+  }
+
+  return { ok: true };
 }
 
 export type MotivoRechazoActualizarPagoTarjeta = "WEBHOOK_NO_CONFIGURADO" | "SERVICIO_NO_ENCONTRADO";

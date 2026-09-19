@@ -220,6 +220,7 @@ export class FakePrisma {
   readonly usuarios: FilaUsuario[] = [];
   readonly eventosAuditoria: FilaEventoAuditoria[] = [];
   readonly payments: FilaPago[] = [];
+  configuracionPagoFila: { id: string; modoSinpe: "MANUAL" | "ONVO" } | null = null;
 
   private proximoConflictoUnico: { tabla: "heat" | "reservation"; target: string; vecesRestantes: number } | null =
     null;
@@ -760,6 +761,39 @@ export class FakePrisma {
     },
     findMany: async ({ where }: { where?: { reservationId?: Id } } = {}) =>
       this.payments.filter((p) => where?.reservationId === undefined || p.reservationId === where.reservationId),
+    findUnique: async ({ where }: { where: { id?: Id; onvoPaymentIntentId?: string } }) =>
+      this.payments.find(
+        (p) =>
+          (where.id !== undefined && p.id === where.id) ||
+          (where.onvoPaymentIntentId !== undefined && p.onvoPaymentIntentId === where.onvoPaymentIntentId),
+      ) ?? null,
+    update: async ({ where, data }: { where: { id: Id }; data: Partial<FilaPago> }) => {
+      const fila = this.payments.find((p) => p.id === where.id);
+      if (!fila) throw new Error(`Payment ${where.id} no existe (fake)`);
+      Object.assign(fila, data);
+      return fila;
+    },
+  };
+
+  readonly configuracionPago = {
+    findUnique: async ({ where }: { where: { id: string } }) =>
+      this.configuracionPagoFila && this.configuracionPagoFila.id === where.id ? this.configuracionPagoFila : null,
+    upsert: async ({
+      where,
+      create,
+      update,
+    }: {
+      where: { id: string };
+      create: { id: string; modoSinpe: "MANUAL" | "ONVO" };
+      update: { modoSinpe: "MANUAL" | "ONVO" };
+    }) => {
+      if (this.configuracionPagoFila && this.configuracionPagoFila.id === where.id) {
+        Object.assign(this.configuracionPagoFila, update);
+      } else {
+        this.configuracionPagoFila = { ...create };
+      }
+      return this.configuracionPagoFila;
+    },
   };
 
   readonly user = {
