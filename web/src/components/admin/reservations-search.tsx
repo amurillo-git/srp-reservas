@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { consultarReserva, obtenerConfiguracionPago, type ModoSinpe } from "@/lib/api";
 import { formatoMoneda } from "@/lib/format";
 import {
+  ajustarAsistentesAdmin,
   buscarReservasAdmin,
   cancelarReservaAdmin,
   iniciarSaldoSinpeAdmin,
@@ -112,19 +113,6 @@ export function ReservationsSearch({ token, serviceId }: { token: string; servic
     setResultados((actual) =>
       actual?.map((r) => (r.codigoPublico === codigoPublico ? { ...r, estado: "PAGADA" } : r)) ?? null,
     );
-  }
-
-  async function cobrarManual(codigoPublico: string) {
-    if (!window.confirm(`¿Confirmás que el cliente ya pagó el saldo completo de ${codigoPublico}?`)) return;
-    setProcesando(codigoPublico);
-    const resultado = await marcarSaldoManualAdmin(token, codigoPublico);
-    setProcesando(null);
-    if (!resultado.ok) {
-      toast.error(textoMotivo(resultado.motivo));
-      return;
-    }
-    toast.success("Saldo cobrado. Reserva pagada por completo.");
-    marcarComoPagada(codigoPublico);
   }
 
   function abrirReprogramar(reserva: ReservaBusqueda) {
@@ -239,9 +227,7 @@ export function ReservationsSearch({ token, serviceId }: { token: string; servic
                     <Button
                       variant="outline"
                       size="xs"
-                      onClick={() =>
-                        modoSinpe === "MANUAL" ? cobrarManual(r.codigoPublico) : setCobrando(cobrando === r.codigoPublico ? null : r.codigoPublico)
-                      }
+                      onClick={() => setCobrando(cobrando === r.codigoPublico ? null : r.codigoPublico)}
                       disabled={procesando === r.codigoPublico}
                     >
                       Cobrar saldo
@@ -270,8 +256,10 @@ export function ReservationsSearch({ token, serviceId }: { token: string; servic
                 <PanelCobroSaldo
                   token={token}
                   codigoPublico={r.codigoPublico}
+                  cantidadPersonas={r.cantidadPersonas}
                   montoSaldo={r.montoSaldo}
                   moneda={r.moneda}
+                  modoSinpe={modoSinpe}
                   onPagado={() => {
                     marcarComoPagada(r.codigoPublico);
                     setCobrando(null);
@@ -330,26 +318,36 @@ export function ReservationsSearch({ token, serviceId }: { token: string; servic
   );
 }
 
-/** Cobro de saldo con modo ONVO (25): elegir SINPE Móvil o tarjeta. En SINPE
- * pide teléfono+cédula (igual que el depósito) y espera confirmación; en
- * tarjeta genera un link de checkout para que el staff se lo muestre al
- * cliente. Ambos casos consultan la reserva cada pocos segundos hasta que
- * pasa a PAGADA. */
+/** Cobro de saldo (25, 28). Primero confirma cuantas personas realmente
+ * llegaron (solo menos que lo reservado; mas sin avisar se resuelve
+ * manualmente, fuera del sistema) y recalcula el saldo si difiere. Despues,
+ * segun el modo global de SINPE: manual (un clic) u ONVO (elegir SINPE
+ * Móvil o tarjeta, con espera de confirmación consultando la reserva cada
+ * pocos segundos hasta que pasa a PAGADA). */
 function PanelCobroSaldo({
   token,
   codigoPublico,
+  cantidadPersonas,
   montoSaldo,
   moneda,
+  modoSinpe,
   onPagado,
   onCerrar,
 }: {
   token: string;
   codigoPublico: string;
+  cantidadPersonas: number;
   montoSaldo: number;
   moneda: string;
+  modoSinpe: ModoSinpe;
   onPagado: () => void;
   onCerrar: () => void;
 }) {
+  const [paso, setPaso] = useState<"asistentes" | "cobro">("asistentes");
+  const [cantidadReal, setCantidadReal] = useState(String(cantidadPersonas));
+  const [saldoActual, setSaldoActual] = useState(montoSaldo);
+  const [ajustando, setAjustando] = useState(false);
+
   const [metodo, setMetodo] = useState<"elegir" | "sinpe">("elegir");
   const [telefono, setTelefono] = useState("");
   const [cedula, setCedula] = useState("");
@@ -368,6 +366,41 @@ function PanelCobroSaldo({
     }, 5000);
     return () => clearInterval(id);
   }, [intencion, checkoutUrl, codigoPublico, onPagado]);
+
+  async function confirmarAsistentes() {
+    const numero = Number(cantidadReal);
+    if (!Number.isInteger(numero) || numero <= 0 || numero > cantidadPersonas) {
+      toast.error(`Ingresá un número entre 1 y ${cantidadPersonas}.`);
+      return;
+    }
+    if (numero === cantidadPersonas) {
+      setPaso("cobro");
+      return;
+    }
+    setAjustando(true);
+    const resultado = await ajustarAsistentesAdmin(token, codigoPublico, numero);
+    if (!resultado.ok) {
+      setAjustando(false);
+      toast.error("No se pudo ajustar la cantidad de personas.");
+      return;
+    }
+    const reserva = await consultarReserva(codigoPublico);
+    setAjustando(false);
+    if (reserva) setSaldoActual(reserva.montoSaldo);
+    setPaso("cobro");
+  }
+
+  async function cobrarManual() {
+    setEnviando(true);
+    const resultado = await marcarSaldoManualAdmin(token, codigoPublico);
+    setEnviando(false);
+    if (!resultado.ok) {
+      toast.error("No se pudo cobrar el saldo.");
+      return;
+    }
+    toast.success("Saldo cobrado. Reserva pagada por completo.");
+    onPagado();
+  }
 
   async function generarSinpe(evento: FormEvent) {
     evento.preventDefault();
@@ -397,85 +430,127 @@ function PanelCobroSaldo({
 
   return (
     <div className="flex flex-col gap-3 border-t pt-3">
-      <p className="text-sm text-muted-foreground">
-        Saldo a cobrar: <span className="font-semibold text-foreground">{formatoMoneda(montoSaldo, moneda)}</span>
-      </p>
-
-      {metodo === "elegir" && !intencion && !checkoutUrl && (
-        <div className="flex gap-2">
-          <Button size="sm" variant="outline" onClick={() => setMetodo("sinpe")} disabled={enviando}>
-            <Landmark data-icon="inline-start" />
-            SINPE Móvil
-          </Button>
-          <Button size="sm" variant="outline" onClick={generarTarjeta} disabled={enviando}>
-            <CreditCard data-icon="inline-start" />
-            {enviando ? "Generando..." : "Tarjeta"}
-          </Button>
-          <Button size="sm" variant="ghost" onClick={onCerrar}>
-            Cancelar
-          </Button>
-        </div>
-      )}
-
-      {metodo === "sinpe" && !intencion && (
-        <form className="flex flex-col gap-3" onSubmit={generarSinpe}>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="flex flex-col gap-1">
-              <Label htmlFor={`saldo-telefono-${codigoPublico}`}>Teléfono</Label>
-              <Input
-                id={`saldo-telefono-${codigoPublico}`}
-                value={telefono}
-                onChange={(e) => setTelefono(e.target.value)}
-                placeholder="+506XXXXXXXX"
-                required
-              />
-            </div>
-            <div className="flex flex-col gap-1">
-              <Label htmlFor={`saldo-cedula-${codigoPublico}`}>Cédula</Label>
-              <Input id={`saldo-cedula-${codigoPublico}`} value={cedula} onChange={(e) => setCedula(e.target.value)} required />
-            </div>
+      {paso === "asistentes" && (
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1">
+            <Label htmlFor={`asistentes-${codigoPublico}`}>¿Cuántas personas llegaron?</Label>
+            <Input
+              id={`asistentes-${codigoPublico}`}
+              type="number"
+              min={1}
+              max={cantidadPersonas}
+              value={cantidadReal}
+              onChange={(e) => setCantidadReal(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">Reservado: {cantidadPersonas} personas.</p>
           </div>
           <div className="flex gap-2">
-            <Button type="submit" size="sm" disabled={enviando}>
-              {enviando ? "Generando..." : "Generar pago"}
+            <Button size="sm" onClick={confirmarAsistentes} disabled={ajustando}>
+              {ajustando ? "Ajustando..." : "Continuar"}
             </Button>
-            <Button type="button" size="sm" variant="ghost" onClick={onCerrar}>
+            <Button size="sm" variant="ghost" onClick={onCerrar} disabled={ajustando}>
               Cancelar
             </Button>
           </div>
-        </form>
-      )}
-
-      {intencion && (
-        <div className="flex flex-col gap-2">
-          <div className="rounded-lg bg-accent p-3 text-sm">
-            <div className="flex items-center justify-between">
-              <span>Número SINPE</span>
-              <span className="font-semibold">{intencion.numeroSinpe}</span>
-            </div>
-            <div className="mt-1 flex items-center justify-between">
-              <span>Monto</span>
-              <span className="font-semibold text-primary">{formatoMoneda(intencion.monto, intencion.moneda)}</span>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
-            Esperando confirmación...
-          </div>
         </div>
       )}
 
-      {checkoutUrl && (
-        <div className="flex flex-col gap-2">
-          <p className="text-sm text-muted-foreground">Mostrale este link al cliente para que pague desde su celular:</p>
-          <a href={checkoutUrl} target="_blank" rel="noreferrer" className="break-all text-sm text-primary underline">
-            {checkoutUrl}
-          </a>
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
-            Esperando confirmación...
-          </div>
-        </div>
+      {paso === "cobro" && (
+        <>
+          <p className="text-sm text-muted-foreground">
+            Saldo a cobrar: <span className="font-semibold text-foreground">{formatoMoneda(saldoActual, moneda)}</span>
+          </p>
+
+          {modoSinpe === "MANUAL" ? (
+            <div className="flex gap-2">
+              <Button size="sm" onClick={cobrarManual} disabled={enviando}>
+                {enviando ? "Procesando..." : "Marcar saldo pagado"}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={onCerrar} disabled={enviando}>
+                Cancelar
+              </Button>
+            </div>
+          ) : (
+            <>
+              {metodo === "elegir" && !intencion && !checkoutUrl && (
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" onClick={() => setMetodo("sinpe")} disabled={enviando}>
+                    <Landmark data-icon="inline-start" />
+                    SINPE Móvil
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={generarTarjeta} disabled={enviando}>
+                    <CreditCard data-icon="inline-start" />
+                    {enviando ? "Generando..." : "Tarjeta"}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={onCerrar}>
+                    Cancelar
+                  </Button>
+                </div>
+              )}
+
+              {metodo === "sinpe" && !intencion && (
+                <form className="flex flex-col gap-3" onSubmit={generarSinpe}>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="flex flex-col gap-1">
+                      <Label htmlFor={`saldo-telefono-${codigoPublico}`}>Teléfono</Label>
+                      <Input
+                        id={`saldo-telefono-${codigoPublico}`}
+                        value={telefono}
+                        onChange={(e) => setTelefono(e.target.value)}
+                        placeholder="+506XXXXXXXX"
+                        required
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <Label htmlFor={`saldo-cedula-${codigoPublico}`}>Cédula</Label>
+                      <Input id={`saldo-cedula-${codigoPublico}`} value={cedula} onChange={(e) => setCedula(e.target.value)} required />
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button type="submit" size="sm" disabled={enviando}>
+                      {enviando ? "Generando..." : "Generar pago"}
+                    </Button>
+                    <Button type="button" size="sm" variant="ghost" onClick={onCerrar}>
+                      Cancelar
+                    </Button>
+                  </div>
+                </form>
+              )}
+
+              {intencion && (
+                <div className="flex flex-col gap-2">
+                  <div className="rounded-lg bg-accent p-3 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span>Número SINPE</span>
+                      <span className="font-semibold">{intencion.numeroSinpe}</span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between">
+                      <span>Monto</span>
+                      <span className="font-semibold text-primary">{formatoMoneda(intencion.monto, intencion.moneda)}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="size-4 animate-spin" />
+                    Esperando confirmación...
+                  </div>
+                </div>
+              )}
+
+              {checkoutUrl && (
+                <div className="flex flex-col gap-2">
+                  <p className="text-sm text-muted-foreground">Mostrale este link al cliente para que pague desde su celular:</p>
+                  <a href={checkoutUrl} target="_blank" rel="noreferrer" className="break-all text-sm text-primary underline">
+                    {checkoutUrl}
+                  </a>
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="size-4 animate-spin" />
+                    Esperando confirmación...
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </>
       )}
     </div>
   );

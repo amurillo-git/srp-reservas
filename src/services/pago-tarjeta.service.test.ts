@@ -379,6 +379,7 @@ describe("procesarWebhookOnvo", () => {
 
     expect(resultado).toEqual({ ok: true });
     expect(fake.reservas[0]!.estado).toBe("PAGADA");
+    expect(fake.reservas[0]!.montoSaldo).toBe(0);
     expect(fake.payments.find((p) => p.onvoPaymentIntentId === "clpiment-saldo-1")!.estado).toBe("PAGADO");
   });
 });

@@ -708,7 +708,7 @@ function redondearMoneda(valor: number): number {
   return Math.round(valor * 100) / 100;
 }
 
-function calcularPrecio(tarifa: TarifaServicio, personas: number): PrecioPropuesto {
+export function calcularPrecio(tarifa: TarifaServicio, personas: number): PrecioPropuesto {
   const precioPorPersona =
     personas >= UMBRAL_GRUPO_GRANDE ? tarifa.precioPorPersonaGrupoGrande : tarifa.precioPorPersonaGrupoPequeno;
   const montoTotal = redondearMoneda(precioPorPersona * personas);

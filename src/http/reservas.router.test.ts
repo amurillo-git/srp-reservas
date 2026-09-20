@@ -737,6 +737,41 @@ describe("cobro de saldo al llegar al parque (POST /admin/reservations/:code/bal
     expect(respuesta.status).toBe(200);
     expect(respuesta.body.checkoutUrl).toBe("https://checkout.onvopay.com/pay/clcs-saldo-http");
   });
+
+  it("28: PUT .../attendees recalcula el total y el saldo cuando llegan menos personas, y registra auditoria", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const codigoPublico = await crearReservaConfirmada(fake, app);
+    const auth = await tokenAdminDePrueba(fake);
+    const reservaAntes = fake.reservas.find((r) => r.codigoPublico === codigoPublico)!;
+    expect(reservaAntes.cantidadPersonas).toBe(5);
+
+    const respuesta = await request(app)
+      .put(`/api/admin/reservations/${codigoPublico}/attendees`)
+      .set("Authorization", auth)
+      .send({ cantidadReal: 3 });
+
+    expect(respuesta.status).toBe(200);
+    const reserva = fake.reservas.find((r) => r.codigoPublico === codigoPublico)!;
+    expect(reserva.cantidadPersonas).toBe(3);
+    expect(fake.eventosAuditoria.find((e) => e.accion === "ASISTENTES_AJUSTADOS")).toBeTruthy();
+  });
+
+  it("28: PUT .../attendees devuelve 400 si cantidadReal es mayor a la reservada", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const codigoPublico = await crearReservaConfirmada(fake, app);
+    const auth = await tokenAdminDePrueba(fake);
+
+    const respuesta = await request(app)
+      .put(`/api/admin/reservations/${codigoPublico}/attendees`)
+      .set("Authorization", auth)
+      .send({ cantidadReal: 10 });
+
+    expect(respuesta.status).toBe(400);
+  });
 });
 
 describe("/api/admin/reports (25)", () => {

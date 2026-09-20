@@ -265,7 +265,7 @@ async function confirmarPorIntencionPago(prisma: PrismaClient, intencionId: stri
         data: { estado: "CONFIRMADA", confirmadaEn: pagadoEn },
       });
     } else if (pago.tipo === "SALDO" && reserva.estado === "CONFIRMADA") {
-      await tx.reservation.update({ where: { id: reserva.id }, data: { estado: "PAGADA" } });
+      await tx.reservation.update({ where: { id: reserva.id }, data: { estado: "PAGADA", montoSaldo: 0 } });
     }
 
     return { ok: true };

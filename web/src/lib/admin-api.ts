@@ -557,6 +557,23 @@ export async function actualizarConfiguracionPagoAdmin(
 // Cobro de saldo al llegar al Race Park (25).
 // ----------------------------------------------------------------------------
 
+/** 28: confirma cuantas personas llegaron realmente (solo menos que lo
+ * reservado). Recalcula el total y el saldo antes de cobrar. */
+export async function ajustarAsistentesAdmin(
+  token: string,
+  codigoPublico: string,
+  cantidadReal: number,
+): Promise<ResultadoAccionSimple> {
+  const { status, datos: cuerpo } = await enviarJsonAdmin<{ motivo?: string; error?: string }>(
+    "PUT",
+    `/admin/reservations/${codigoPublico}/attendees`,
+    token,
+    { cantidadReal },
+  );
+  if (status === 200) return { ok: true };
+  return { ok: false, motivo: cuerpo.motivo ?? cuerpo.error ?? "No se pudo ajustar la cantidad de personas" };
+}
+
 export async function marcarSaldoManualAdmin(token: string, codigoPublico: string): Promise<ResultadoAccionSimple> {
   const { status, datos: cuerpo } = await enviarJsonAdmin<{ motivo?: string; error?: string }>(
     "POST",

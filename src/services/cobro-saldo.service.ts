@@ -9,6 +9,7 @@
 
 import { Prisma, PrismaClient } from "@prisma/client";
 import { obtenerModoSinpe } from "./configuracion-pago.service.js";
+import { calcularPrecio } from "../motor-disponibilidad/motor-disponibilidad.js";
 
 async function bloquearYLeerReservaPorCodigo(tx: Prisma.TransactionClient, codigoPublico: string) {
   const previa = await tx.reservation.findUnique({ where: { codigoPublico } });
@@ -56,7 +57,67 @@ export async function marcarSaldoPagadoManual(
         pagadoEn,
       },
     });
-    await tx.reservation.update({ where: { id: reserva.id }, data: { estado: "PAGADA" } });
+    await tx.reservation.update({ where: { id: reserva.id }, data: { estado: "PAGADA", montoSaldo: 0 } });
+    return { ok: true };
+  });
+}
+
+export type MotivoRechazoAjusteAsistentes = "NO_ENCONTRADA" | "ESTADO_INVALIDO" | "CANTIDAD_INVALIDA";
+
+export type ResultadoAjusteAsistentes =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly motivo: MotivoRechazoAjusteAsistentes };
+
+/**
+ * Ajusta la cantidad de personas que realmente llegaron al parque (28),
+ * cuando es MENOR a la reservada — si llegan mas sin avisar, se resuelve
+ * manualmente fuera del sistema (solo se trabaja bajo reserva). Recalcula el
+ * total segun las tarifas del servicio para la nueva cantidad; el deposito
+ * ya pagado NO se toca, y el saldo pendiente se recalcula (nunca negativo:
+ * no hay creditos a favor si el nuevo total queda por debajo de lo pagado).
+ *
+ * No modifica HeatAllocation: es el mismo dia del evento, liberar cupo no
+ * tiene ningun efecto util (nadie mas va a ocuparlo a esa hora).
+ */
+export async function ajustarAsistentesReales(
+  prisma: PrismaClient,
+  codigoPublico: string,
+  cantidadReal: number,
+): Promise<ResultadoAjusteAsistentes> {
+  if (!Number.isInteger(cantidadReal) || cantidadReal <= 0) {
+    return { ok: false, motivo: "CANTIDAD_INVALIDA" };
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const reserva = await bloquearYLeerReservaPorCodigo(tx, codigoPublico);
+    if (!reserva) return { ok: false, motivo: "NO_ENCONTRADA" };
+    if (reserva.estado !== "CONFIRMADA") return { ok: false, motivo: "ESTADO_INVALIDO" };
+    if (cantidadReal > reserva.cantidadPersonas) return { ok: false, motivo: "CANTIDAD_INVALIDA" };
+    if (cantidadReal === reserva.cantidadPersonas) return { ok: true };
+
+    const servicio = await tx.service.findUnique({ where: { id: reserva.servicioId } });
+    if (!servicio) return { ok: false, motivo: "NO_ENCONTRADA" };
+
+    const precio = calcularPrecio(
+      {
+        servicioId: servicio.id,
+        moneda: servicio.moneda,
+        precioPorPersonaGrupoPequeno: Number(servicio.precioPorPersonaGrupoPequeno),
+        precioPorPersonaGrupoGrande: Number(servicio.precioPorPersonaGrupoGrande),
+        porcentajeDeposito: servicio.porcentajeDeposito,
+      },
+      cantidadReal,
+    );
+
+    await tx.reservation.update({
+      where: { id: reserva.id },
+      data: {
+        cantidadPersonas: cantidadReal,
+        montoTotal: precio.montoTotal,
+        montoSaldo: Math.max(0, precio.montoTotal - Number(reserva.montoDeposito)),
+      },
+    });
+
     return { ok: true };
   });
 }

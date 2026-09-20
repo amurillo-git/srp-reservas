@@ -27,7 +27,7 @@ import {
 } from "../services/pago-tarjeta.service.js";
 import { crearIntencionSaldoOnvo, crearIntencionSinpeOnvo } from "../services/pago-sinpe-onvo.service.js";
 import { establecerModoSinpe, obtenerModoSinpe } from "../services/configuracion-pago.service.js";
-import { marcarSaldoPagadoManual } from "../services/cobro-saldo.service.js";
+import { ajustarAsistentesReales, marcarSaldoPagadoManual } from "../services/cobro-saldo.service.js";
 import { iniciarSesion } from "../services/auth.service.js";
 import { requireAuth, type RequestAutenticado } from "./auth.middleware.js";
 import { listarEventos, registrarEvento, type ActorAuditoria } from "../services/auditoria.service.js";
@@ -1066,6 +1066,32 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
   // 25: cobro de saldo al llegar al Race Park, iniciado por el staff desde
   // el panel (no por el cliente): por eso vive bajo /admin y usa los mismos
   // roles que validan SINPE (manejan dinero).
+  // 28: confirma cuantas personas realmente llegaron (solo menos que lo
+  // reservado; mas sin avisar se resuelve manualmente). Se llama antes de
+  // cobrar el saldo si el numero difiere.
+  router.put(
+    "/admin/reservations/:publicCode/attendees",
+    requireAuth(ROLES_VALIDAN_SINPE),
+    conManejoDeErrores(async (req, res) => {
+      const { cantidadReal } = req.body ?? {};
+      if (typeof cantidadReal !== "number") {
+        return enviarError(res, 400, "cantidadReal debe ser numero");
+      }
+
+      const resultado = await ajustarAsistentesReales(prisma, req.params.publicCode!, cantidadReal);
+      if (resultado.ok) {
+        await registrarEvento(prisma, actorDesde(req), {
+          accion: "ASISTENTES_AJUSTADOS", objetoTipo: "RESERVA", objetoId: req.params.publicCode!,
+          valoresNuevos: { cantidadReal },
+        });
+        res.status(200).json({ ok: true });
+        return;
+      }
+      const status = resultado.motivo === "NO_ENCONTRADA" ? 404 : resultado.motivo === "CANTIDAD_INVALIDA" ? 400 : 409;
+      enviarError(res, status, resultado.motivo);
+    }),
+  );
+
   router.post(
     "/admin/reservations/:publicCode/balance/manual",
     requireAuth(ROLES_VALIDAN_SINPE),
