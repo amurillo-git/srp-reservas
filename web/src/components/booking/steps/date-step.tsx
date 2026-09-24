@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { CalendarDays } from "lucide-react";
 import { es } from "date-fns/locale";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Calendar } from "@/components/ui/calendar";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -29,10 +30,12 @@ export function DateStep({
   servicioId,
   cantidadPersonas,
   onSelect,
+  onBack,
 }: {
   servicioId: string;
   cantidadPersonas: number;
   onSelect: (fecha: string) => void;
+  onBack: () => void;
 }) {
   const [mesMostrado, setMesMostrado] = useState(new Date());
   const [resultado, setResultado] = useState<ResultadoDisponibilidad | null>(null);
@@ -67,7 +70,7 @@ export function DateStep({
         <CardTitle className="text-xl">Elegí una fecha</CardTitle>
         <CardDescription>Solo se muestran fechas con cupo para {cantidadPersonas} personas.</CardDescription>
       </CardHeader>
-      <CardContent className="flex justify-center">
+      <CardContent className="flex flex-col items-center">
         {fechasDisponibles === null ? (
           <Skeleton className="h-80 w-full max-w-sm rounded-2xl" />
         ) : (
@@ -81,6 +84,9 @@ export function DateStep({
             className="rounded-2xl border"
           />
         )}
+        <Button type="button" variant="ghost" className="mt-4 w-fit rounded-2xl" onClick={onBack}>
+          Atrás
+        </Button>
       </CardContent>
     </Card>
   );

@@ -103,6 +103,7 @@ export function BookingWizard() {
             setEstado({ ...estado, fecha });
             setPaso("hora");
           }}
+          onBack={() => setPaso("personas")}
         />
       )}
 
@@ -115,6 +116,7 @@ export function BookingWizard() {
             setEstado({ ...estado, horaInicio });
             setPaso("cliente");
           }}
+          onBack={() => setPaso("fecha")}
         />
       )}
 
@@ -125,6 +127,7 @@ export function BookingWizard() {
             setEstado({ ...estado, cliente });
             setPaso("revision");
           }}
+          onBack={() => setPaso("hora")}
         />
       )}
 

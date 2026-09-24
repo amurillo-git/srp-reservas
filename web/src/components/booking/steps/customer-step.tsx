@@ -11,9 +11,11 @@ import type { DatosClienteReserva } from "@/lib/types";
 export function CustomerStep({
   valorInicial,
   onSubmit,
+  onBack,
 }: {
   valorInicial: DatosClienteReserva | null;
   onSubmit: (cliente: DatosClienteReserva) => void;
+  onBack: () => void;
 }) {
   const [nombre, setNombre] = useState(valorInicial?.name ?? "");
   const [telefono, setTelefono] = useState(valorInicial?.phone ?? "");
@@ -50,6 +52,9 @@ export function CustomerStep({
           </div>
           <Button type="submit" size="lg" className="mt-2 rounded-2xl">
             Continuar
+          </Button>
+          <Button type="button" variant="ghost" className="w-fit rounded-2xl" onClick={onBack}>
+            Atrás
           </Button>
         </form>
       </CardContent>

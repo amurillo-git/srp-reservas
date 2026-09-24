@@ -14,11 +14,13 @@ export function TimeStep({
   fecha,
   cantidadPersonas,
   onSelect,
+  onBack,
 }: {
   servicioId: string;
   fecha: string;
   cantidadPersonas: number;
   onSelect: (hora: string) => void;
+  onBack: () => void;
 }) {
   const [resultado, setResultado] = useState<{ clave: string; horas: readonly string[] } | null>(null);
   const clave = `${servicioId}|${fecha}|${cantidadPersonas}`;
@@ -74,6 +76,9 @@ export function TimeStep({
             ))}
           </div>
         )}
+        <Button type="button" variant="ghost" className="mt-4 w-fit rounded-2xl" onClick={onBack}>
+          Atrás
+        </Button>
       </CardContent>
     </Card>
   );
