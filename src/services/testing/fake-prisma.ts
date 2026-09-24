@@ -126,6 +126,7 @@ export interface FilaReserva {
   servicioId: Id;
   fecha: Date;
   cantidadPersonas: number;
+  repeticiones?: number;
   estado: string;
   moneda: string;
   montoTotal: number;

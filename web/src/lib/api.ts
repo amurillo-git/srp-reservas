@@ -2,7 +2,14 @@
 // backend). No contiene reglas de negocio: solo arma la solicitud HTTP y
 // tipa la respuesta.
 
-import type { DatosClienteReserva, PlanDisponibilidad, ReservaPublica, ResultadoCrearReserva, Servicio } from "./types";
+import type {
+  DatosClienteReserva,
+  PlanDisponibilidad,
+  PlanRepetido,
+  ReservaPublica,
+  ResultadoCrearReserva,
+  Servicio,
+} from "./types";
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000/api";
 
@@ -65,12 +72,34 @@ export async function consultarCotizacion(
   return plan;
 }
 
+/** Previsualiza si ambas (o todas las) repeticiones caben consecutivas a
+ * partir de `startTime`; si no, devuelve las horas ese mismo dia donde
+ * cabria una reserva independiente solo para la vuelta restante. */
+export async function consultarDisponibilidadRepeticiones(
+  serviceId: string,
+  date: string,
+  startTime: string,
+  partySize: number,
+  repetitions: number,
+): Promise<PlanRepetido> {
+  const respuesta = await fetch(`${BASE_URL}/availability/quote-repeticiones`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ serviceId, date, startTime, partySize, repetitions }),
+  });
+  return respuesta.json();
+}
+
 export interface SolicitudCrearReserva {
   readonly serviceId: string;
   readonly date: string;
   readonly startTime: string;
   readonly partySize: number;
   readonly customer: DatosClienteReserva;
+  /** Vueltas completas solicitadas (1 = comportamiento de siempre). */
+  readonly repetitions?: number;
+  /** Solo si `repetitions` >= 2 y la 2a vuelta no cupo justo despues de la 1a. */
+  readonly secondRoundStartTime?: string;
 }
 
 /** 8.8.7: idempotencyKey debe ser generada y conservada por el llamador (un

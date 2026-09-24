@@ -196,6 +196,75 @@ describe("POST /api/reservations", () => {
     expect(respuesta.body.exito).toBe(false);
     expect(respuesta.body.motivo).toBe("NO_DISPONIBLE");
   });
+
+  it("rechaza repetitions fuera de 1 o 2", async () => {
+    const app = crearApp(comoPrisma(new FakePrisma()));
+    const respuesta = await request(app)
+      .post("/api/reservations")
+      .set("Idempotency-Key", "idem-rep-invalido")
+      .send({ ...solicitudValida, repetitions: 3 });
+    expect(respuesta.status).toBe(400);
+  });
+
+  it("con repetitions=2 y ambas vueltas consecutivas, crea una reserva con precio duplicado", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+
+    const respuesta = await request(crearApp(comoPrisma(fake)))
+      .post("/api/reservations")
+      .set("Idempotency-Key", "idem-http-repeticiones")
+      .send({ ...solicitudValida, repetitions: 2 });
+
+    expect(respuesta.status).toBe(201);
+    expect(respuesta.body.exito).toBe(true);
+    expect(fake.reservas[0]!.montoTotal).toBe(40000);
+    expect(fake.heats).toHaveLength(2);
+  });
+
+  it("con repetitions=2 y secondRoundStartTime, crea dos lotes independientes", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    fake.crearBloqueo({ id: "bloqueo-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE, horaInicio: "09:45", horaFin: "10:00" });
+
+    const respuesta = await request(crearApp(comoPrisma(fake)))
+      .post("/api/reservations")
+      .set("Idempotency-Key", "idem-http-repeticiones-separado")
+      .send({ ...solicitudValida, partySize: 6, repetitions: 2, secondRoundStartTime: "10:00" });
+
+    expect(respuesta.status).toBe(201);
+    expect(respuesta.body.exito).toBe(true);
+    expect(fake.lotes).toHaveLength(2);
+    expect(fake.heats).toHaveLength(4);
+  });
+});
+
+describe("POST /api/availability/quote-repeticiones", () => {
+  it("valida el cuerpo de la solicitud, incluyendo repetitions", async () => {
+    const app = crearApp(comoPrisma(new FakePrisma()));
+    expect(
+      (await request(app).post("/api/availability/quote-repeticiones").send({ serviceId: SERVICIO_ID })).status,
+    ).toBe(400);
+    expect(
+      (
+        await request(app)
+          .post("/api/availability/quote-repeticiones")
+          .send({ serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "09:00", partySize: 5, repetitions: 3 })
+      ).status,
+    ).toBe(400);
+  });
+
+  it("devuelve tipo continuo cuando ambas vueltas caben consecutivas", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+
+    const respuesta = await request(crearApp(comoPrisma(fake)))
+      .post("/api/availability/quote-repeticiones")
+      .send({ serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "09:00", partySize: 5, repetitions: 2 });
+
+    expect(respuesta.status).toBe(200);
+    expect(respuesta.body.tipo).toBe("continuo");
+    expect(respuesta.body.plan.lotes).toHaveLength(1);
+  });
 });
 
 describe("GET /api/reservations/:publicCode", () => {

@@ -352,6 +352,100 @@ export function construirPlan(
 }
 
 // ----------------------------------------------------------------------------
+// 9bis. Repeticiones: el mismo grupo corre varias vueltas completas (precio
+// completo cada vez, sin descuento). Se intenta primero que todas las
+// vueltas queden consecutivas EN UN SOLO LOTE (una sola limpieza al final,
+// sin espacio entre vueltas); si la continuacion no cabe pero la 1a vuelta
+// si, el llamador debe pedirle al cliente otro horario (mismo dia) solo
+// para la vuelta restante, que en ese caso lleva su propia limpieza por
+// quedar separada de la primera.
+// ----------------------------------------------------------------------------
+
+/** Ambas (o todas las) repeticiones quedaron consecutivas en un solo lote. */
+export interface PlanRepetidoContinuo {
+  readonly tipo: "continuo";
+  readonly plan: PlanDisponible;
+}
+
+/** La 1a vuelta cabe en `horaInicioCandidata`, pero no hay espacio consecutivo
+ * para la siguiente: el cliente debe elegir otro horario solo para ella. */
+export interface PlanRepetidoRequiereSeparado {
+  readonly tipo: "requiere_horario_separado";
+  readonly planPrimeraVuelta: PlanDisponible;
+}
+
+/** Ni siquiera la 1a vuelta cabe en `horaInicioCandidata`. */
+export interface PlanRepetidoNoDisponible {
+  readonly tipo: "no_disponible";
+  readonly motivo: MotivoNoDisponible;
+  readonly detalle?: string;
+}
+
+export type PlanRepetido =
+  | PlanRepetidoContinuo
+  | PlanRepetidoRequiereSeparado
+  | PlanRepetidoNoDisponible;
+
+function multiplicarPrecio(precio: PrecioPropuesto, factor: number): PrecioPropuesto {
+  return {
+    moneda: precio.moneda,
+    montoTotal: redondearMoneda(precio.montoTotal * factor),
+    montoDeposito: redondearMoneda(precio.montoDeposito * factor),
+    montoSaldo: redondearMoneda(precio.montoSaldo * factor),
+  };
+}
+
+/**
+ * Igual que `construirPlan`, pero para un grupo que quiere correr
+ * `repeticiones` vueltas completas (precio completo cada vez). Es una
+ * funcion pura: no hace I/O ni bloquea nada, solo propone.
+ *
+ * @param repeticiones cantidad de vueltas completas solicitadas (1 = igual a
+ *   `construirPlan`).
+ */
+export function construirPlanConRepeticiones(
+  solicitud: SolicitudConstruirPlan,
+  repeticiones: number,
+): PlanRepetido {
+  if (repeticiones <= 1) {
+    const plan = construirPlan(solicitud);
+    if (!plan.disponible) {
+      return { tipo: "no_disponible", motivo: plan.motivo, ...(plan.detalle !== undefined ? { detalle: plan.detalle } : {}) };
+    }
+    return { tipo: "continuo", plan };
+  }
+
+  const { contexto, cantidadPersonas, horaInicioCandidata } = solicitud;
+  const mapaBloques = indexarRejillaPorInicio(contexto.rejilla);
+  const inicioMin = horaAMinutos(horaInicioCandidata);
+
+  const heatsPorVuelta = Math.ceil(cantidadPersonas / CAPACIDAD_MAXIMA_POR_HEAT);
+  const distribucionPorVuelta = distribuirEquilibradamente(cantidadPersonas, heatsPorVuelta);
+  const distribucionCombinada: number[] = [];
+  for (let i = 0; i < repeticiones; i++) distribucionCombinada.push(...distribucionPorVuelta);
+
+  const intentoContinuo = buscarEnPosicionFija(mapaBloques, inicioMin, distribucionCombinada);
+  if (intentoContinuo.exito) {
+    const planBase = construirPlanDisponible([intentoContinuo.lote], cantidadPersonas, contexto);
+    const precio = planBase.precio ? multiplicarPrecio(planBase.precio, repeticiones) : undefined;
+    return {
+      tipo: "continuo",
+      plan: { ...planBase, ...(precio !== undefined ? { precio } : {}) },
+    };
+  }
+
+  const planPrimeraVuelta = construirPlan(solicitud);
+  if (!planPrimeraVuelta.disponible) {
+    return {
+      tipo: "no_disponible",
+      motivo: planPrimeraVuelta.motivo,
+      ...(planPrimeraVuelta.detalle !== undefined ? { detalle: planPrimeraVuelta.detalle } : {}),
+    };
+  }
+  return { tipo: "requiere_horario_separado", planPrimeraVuelta };
+}
+
+// ----------------------------------------------------------------------------
 // 10. Implementacion interna (Etapa 2)
 // ----------------------------------------------------------------------------
 // Funciones internas (no exportadas). Usan aritmetica de minutos-desde-

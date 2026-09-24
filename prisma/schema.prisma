@@ -273,6 +273,9 @@ model Reservation {
   servicioId          String        @map("service_id")
   fecha               DateTime      @db.Date
   cantidadPersonas    Int           @map("cantidad_personas")
+  /// Vueltas completas pedidas por el cliente (precio completo cada una,
+  /// sin descuento). 1 = comportamiento de siempre.
+  repeticiones        Int           @default(1) @map("repeticiones")
   estado              EstadoReserva @default(TEMPORAL)
   moneda              String        @db.VarChar(3)
   montoTotal          Decimal       @map("monto_total") @db.Decimal(10, 2)

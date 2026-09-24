@@ -10,12 +10,15 @@ const MAX = 40;
 
 export function PartySizeStep({
   valorInicial,
+  valorInicialRepeticiones,
   onSubmit,
 }: {
   valorInicial: number | null;
-  onSubmit: (cantidad: number) => void;
+  valorInicialRepeticiones: number;
+  onSubmit: (cantidad: number, repeticiones: number) => void;
 }) {
   const [cantidad, setCantidad] = useState(valorInicial ?? 5);
+  const [repeticiones, setRepeticiones] = useState(valorInicialRepeticiones);
 
   function ajustar(delta: number) {
     setCantidad((c) => Math.min(MAX, Math.max(MIN, c + delta)));
@@ -56,7 +59,35 @@ export function PartySizeStep({
             <Plus className="size-5" />
           </Button>
         </div>
-        <Button size="lg" className="rounded-2xl" onClick={() => onSubmit(cantidad)}>
+
+        <div className="flex flex-col items-center gap-2">
+          <span className="text-muted-foreground text-sm">¿Cuántas vueltas completas?</span>
+          <div className="flex items-center justify-center gap-3">
+            <Button
+              type="button"
+              variant={repeticiones === 1 ? "default" : "secondary"}
+              className="rounded-2xl"
+              onClick={() => setRepeticiones(1)}
+            >
+              1 vuelta
+            </Button>
+            <Button
+              type="button"
+              variant={repeticiones === 2 ? "default" : "secondary"}
+              className="rounded-2xl"
+              onClick={() => setRepeticiones(2)}
+            >
+              2 vueltas
+            </Button>
+          </div>
+          {repeticiones === 2 && (
+            <p className="text-muted-foreground text-center text-xs">
+              Se cobra el precio completo de cada vuelta, sin descuento.
+            </p>
+          )}
+        </div>
+
+        <Button size="lg" className="rounded-2xl" onClick={() => onSubmit(cantidad, repeticiones)}>
           Continuar
         </Button>
       </CardContent>

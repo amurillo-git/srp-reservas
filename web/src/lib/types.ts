@@ -41,6 +41,17 @@ export type PlanDisponibilidad =
     }
   | { readonly disponible: false; readonly motivo: string; readonly detalle?: string };
 
+/** Respuesta de `POST /availability/quote-repeticiones` (repeticiones: el
+ * cliente quiere que su grupo corra mas de una vuelta completa). */
+export type PlanRepetido =
+  | { readonly tipo: "continuo"; readonly plan: PlanDisponibilidad }
+  | {
+      readonly tipo: "requiere_horario_separado";
+      readonly planPrimeraVuelta: PlanDisponibilidad;
+      readonly horasDisponiblesVuelta2: readonly string[];
+    }
+  | { readonly tipo: "no_disponible"; readonly motivo: string; readonly detalle?: string };
+
 export interface DatosClienteReserva {
   readonly name: string;
   readonly phone: string;

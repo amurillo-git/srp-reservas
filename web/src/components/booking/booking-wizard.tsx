@@ -9,6 +9,7 @@ import type { EstadoWizard, PasoReserva } from "./types";
 import { PartySizeStep } from "./steps/party-size-step";
 import { DateStep } from "./steps/date-step";
 import { TimeStep } from "./steps/time-step";
+import { SecondRoundStep } from "./steps/second-round-step";
 import { CustomerStep } from "./steps/customer-step";
 import { ReviewStep } from "./steps/review-step";
 import { PaymentStep } from "./steps/payment-step";
@@ -28,8 +29,10 @@ function nuevoEstado(servicio: Servicio): EstadoWizard {
   return {
     servicio,
     cantidadPersonas: null,
+    repeticiones: 1,
     fecha: null,
     horaInicio: null,
+    horaInicioVuelta2: null,
     cliente: null,
     plan: null,
     codigoPublico: null,
@@ -67,7 +70,10 @@ export function BookingWizard() {
     return <Skeleton className="h-96 w-full max-w-lg rounded-2xl" />;
   }
 
-  const indicePaso = PASOS.findIndex((p) => p.id === paso);
+  // "vuelta2" es un paso condicional (solo con repeticiones=2) que no tiene
+  // su propio punto en la barra de progreso: cuenta como "hora" para no
+  // alterar el largo de la barra para quienes reservan una sola vuelta.
+  const indicePaso = PASOS.findIndex((p) => p.id === (paso === "vuelta2" ? "hora" : paso));
 
   return (
     <div className="flex w-full max-w-lg flex-col gap-6">
@@ -88,8 +94,9 @@ export function BookingWizard() {
       {paso === "personas" && (
         <PartySizeStep
           valorInicial={estado.cantidadPersonas}
-          onSubmit={(cantidadPersonas) => {
-            setEstado({ ...estado, cantidadPersonas });
+          valorInicialRepeticiones={estado.repeticiones}
+          onSubmit={(cantidadPersonas, repeticiones) => {
+            setEstado({ ...estado, cantidadPersonas, repeticiones, horaInicioVuelta2: null });
             setPaso("fecha");
           }}
         />
@@ -113,10 +120,29 @@ export function BookingWizard() {
           fecha={estado.fecha}
           cantidadPersonas={estado.cantidadPersonas}
           onSelect={(horaInicio) => {
-            setEstado({ ...estado, horaInicio });
-            setPaso("cliente");
+            setEstado({ ...estado, horaInicio, horaInicioVuelta2: null });
+            setPaso(estado.repeticiones === 2 ? "vuelta2" : "cliente");
           }}
           onBack={() => setPaso("fecha")}
+        />
+      )}
+
+      {paso === "vuelta2" && estado.fecha && estado.horaInicio && estado.cantidadPersonas && (
+        <SecondRoundStep
+          servicioId={servicio.id}
+          fecha={estado.fecha}
+          horaInicio={estado.horaInicio}
+          cantidadPersonas={estado.cantidadPersonas}
+          onContinuo={() => {
+            setEstado({ ...estado, horaInicioVuelta2: null });
+            setPaso("cliente");
+          }}
+          onSeparado={(horaInicioVuelta2) => {
+            setEstado({ ...estado, horaInicioVuelta2 });
+            setPaso("cliente");
+          }}
+          onSinDisponibilidad={() => setPaso("hora")}
+          onBack={() => setPaso("hora")}
         />
       )}
 
@@ -127,7 +153,7 @@ export function BookingWizard() {
             setEstado({ ...estado, cliente });
             setPaso("revision");
           }}
-          onBack={() => setPaso("hora")}
+          onBack={() => setPaso(estado.repeticiones === 2 ? "vuelta2" : "hora")}
         />
       )}
 

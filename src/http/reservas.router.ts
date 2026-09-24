@@ -13,6 +13,7 @@ import type { PrismaClient, Rol } from "@prisma/client";
 import {
   confirmarReserva,
   consultarDisponibilidad,
+  consultarDisponibilidadRepetida,
   consultarReservaPorCodigo,
   listarFechasConDisponibilidad,
   listarHorasDisponibles,
@@ -224,6 +225,43 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
     }),
   );
 
+  /** Entero 1 o 2 (repeticiones: maximo 2 vueltas por reserva). `null` si el
+   * valor esta ausente o fuera de ese rango. */
+  function comoRepeticionesValidas(valor: unknown): number | null {
+    return typeof valor === "number" && Number.isInteger(valor) && (valor === 1 || valor === 2) ? valor : null;
+  }
+
+  router.post(
+    "/availability/quote-repeticiones",
+    conManejoDeErrores(async (req, res) => {
+      const { serviceId, date, startTime, partySize, repetitions } = req.body ?? {};
+
+      if (typeof serviceId !== "string" || serviceId.length === 0) {
+        return enviarError(res, 400, "serviceId es requerido");
+      }
+      if (typeof date !== "string" || !PATRON_FECHA.test(date)) {
+        return enviarError(res, 400, "date debe tener el formato YYYY-MM-DD");
+      }
+      if (typeof startTime !== "string" || !PATRON_HORA.test(startTime)) {
+        return enviarError(res, 400, "startTime debe tener el formato HH:mm");
+      }
+      if (typeof partySize !== "number" || !Number.isInteger(partySize) || partySize <= 0) {
+        return enviarError(res, 400, "partySize debe ser un entero positivo");
+      }
+      const repeticionesValidas = comoRepeticionesValidas(repetitions);
+      if (repeticionesValidas === null) {
+        return enviarError(res, 400, "repetitions debe ser 1 o 2");
+      }
+
+      const resultado = await consultarDisponibilidadRepetida(
+        prisma,
+        { servicioId: serviceId, fecha: date, horaInicioCandidata: startTime, cantidadPersonas: partySize },
+        repeticionesValidas,
+      );
+      res.json(resultado);
+    }),
+  );
+
   router.post(
     "/reservations",
     conManejoDeErrores(async (req, res) => {
@@ -234,7 +272,7 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
         return enviarError(res, 400, 'El encabezado "Idempotency-Key" es requerido');
       }
 
-      const { serviceId, date, startTime, partySize, customer } = req.body ?? {};
+      const { serviceId, date, startTime, partySize, customer, repetitions, secondRoundStartTime } = req.body ?? {};
 
       if (typeof serviceId !== "string" || serviceId.length === 0) {
         return enviarError(res, 400, "serviceId es requerido");
@@ -261,6 +299,18 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
       if (customer.email !== undefined && typeof customer.email !== "string") {
         return enviarError(res, 400, "customer.email debe ser texto");
       }
+      // repetitions es opcional (1 = comportamiento de siempre); si viene, debe ser 1 o 2.
+      let repeticionesValidas = 1;
+      if (repetitions !== undefined) {
+        const valor = comoRepeticionesValidas(repetitions);
+        if (valor === null) {
+          return enviarError(res, 400, "repetitions debe ser 1 o 2");
+        }
+        repeticionesValidas = valor;
+      }
+      if (secondRoundStartTime !== undefined && !PATRON_HORA.test(secondRoundStartTime)) {
+        return enviarError(res, 400, "secondRoundStartTime debe tener el formato HH:mm");
+      }
 
       const resultado = await confirmarReserva(prisma, {
         servicioId: serviceId,
@@ -269,6 +319,8 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
         cantidadPersonas: partySize,
         cliente: { nombre: customer.name, telefono: customer.phone, email: customer.email },
         claveIdempotencia,
+        repeticiones: repeticionesValidas,
+        horaInicioVuelta2: secondRoundStartTime,
       });
 
       if (resultado.exito) {

@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
-import { confirmarReserva, consultarDisponibilidad, consultarDisponibilidadDelDia } from "./availability.service.js";
+import {
+  confirmarReserva,
+  consultarDisponibilidad,
+  consultarDisponibilidadDelDia,
+  consultarDisponibilidadRepetida,
+} from "./availability.service.js";
 import { FakePrisma } from "./testing/fake-prisma.js";
 
 // Pruebas unitarias de availability.service.ts contra el doble en memoria
@@ -543,5 +548,152 @@ describe("confirmarReserva", () => {
     // El intento fallido no debe dejar una reserva huerfana (rollback del fake).
     expect(fake.reservas).toHaveLength(1);
     expect(fake.heats).toHaveLength(1);
+  });
+});
+
+describe("consultarDisponibilidadRepetida", () => {
+  it("5 personas x2 repeticiones, dia vacio -> continuo: un solo lote, precio duplicado, sin exponer limpieza", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+
+    const resultado = await consultarDisponibilidadRepetida(
+      comoPrisma(fake),
+      { servicioId: SERVICIO_ID, fecha: FECHA_ISO, horaInicioCandidata: "09:00", cantidadPersonas: 5 },
+      2,
+    );
+
+    expect(resultado.tipo).toBe("continuo");
+    if (resultado.tipo !== "continuo") return;
+    expect("liberacionOperativa" in resultado.plan).toBe(false);
+    expect(resultado.plan.lotes).toHaveLength(1);
+    expect(
+      resultado.plan.lotes[0]!.heats.map((h) => [h.horaInicio, h.horaFin, h.personasAsignadas]),
+    ).toEqual([
+      ["09:00", "09:15", 5],
+      ["09:15", "09:30", 5],
+    ]);
+    // tarifa grupal (4000/persona, >=5) x5 = 20000; x2 repeticiones = 40000.
+    expect(resultado.plan.precio).toEqual({ moneda: "CRC", montoTotal: 40000, montoDeposito: 20000, montoSaldo: 20000 });
+  });
+
+  it("6 personas x2 repeticiones con la continuacion bloqueada -> requiere horario separado, con horas disponibles ese mismo dia para la vuelta 2", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    // Bloquea justo el segundo heat de la 2a vuelta (09:45-10:00): la 1a
+    // vuelta sola (09:00-09:30 + limpieza 09:30-09:45) no lo necesita.
+    fake.crearBloqueo({ id: "bloqueo-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE, horaInicio: "09:45", horaFin: "10:00" });
+
+    const resultado = await consultarDisponibilidadRepetida(
+      comoPrisma(fake),
+      { servicioId: SERVICIO_ID, fecha: FECHA_ISO, horaInicioCandidata: "09:00", cantidadPersonas: 6 },
+      2,
+    );
+
+    expect(resultado.tipo).toBe("requiere_horario_separado");
+    if (resultado.tipo !== "requiere_horario_separado") return;
+    expect(resultado.planPrimeraVuelta.lotes[0]!.heats.map((h) => [h.horaInicio, h.horaFin, h.personasAsignadas])).toEqual([
+      ["09:00", "09:15", 3],
+      ["09:15", "09:30", 3],
+    ]);
+    // Nada antes de que termine la limpieza de la 1a vuelta (09:45), y el
+    // propio bloqueo (09:45) tampoco puede ser inicio de la 2a vuelta.
+    expect(resultado.horasDisponiblesVuelta2).not.toContain("09:00");
+    expect(resultado.horasDisponiblesVuelta2).not.toContain("09:30");
+    expect(resultado.horasDisponiblesVuelta2).not.toContain("09:45");
+    expect(resultado.horasDisponiblesVuelta2).toContain("10:00");
+  });
+
+  it("si ni siquiera la 1a vuelta cabe -> no_disponible", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+
+    const resultado = await consultarDisponibilidadRepetida(
+      comoPrisma(fake),
+      { servicioId: SERVICIO_ID, fecha: FECHA_ISO, horaInicioCandidata: "11:45", cantidadPersonas: 5 },
+      2,
+    );
+
+    expect(resultado.tipo).toBe("no_disponible");
+  });
+});
+
+describe("confirmarReserva con repeticiones", () => {
+  it("repeticiones=2 sin conflicto -> continuo: un lote con 2 heats, precio duplicado", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+
+    const resultado = await confirmarReserva(comoPrisma(fake), {
+      servicioId: SERVICIO_ID, fecha: FECHA_ISO, horaInicioCandidata: "09:00", cantidadPersonas: 5,
+      cliente: { nombre: "Ana", telefono: "8888-0000" },
+      claveIdempotencia: "idem-rep-continuo",
+      repeticiones: 2,
+    });
+
+    expect(resultado.exito).toBe(true);
+    if (!resultado.exito) return;
+    expect(fake.lotes).toHaveLength(1);
+    expect(fake.heats).toHaveLength(2);
+    expect(fake.asignaciones).toHaveLength(2);
+    expect(fake.reservas[0]!.montoTotal).toBe(40000);
+  });
+
+  it("repeticiones=2 con horario separado provisto -> dos lotes independientes, cada uno con su propia limpieza, precio sumado", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    fake.crearBloqueo({ id: "bloqueo-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE, horaInicio: "09:45", horaFin: "10:00" });
+
+    const resultado = await confirmarReserva(comoPrisma(fake), {
+      servicioId: SERVICIO_ID, fecha: FECHA_ISO, horaInicioCandidata: "09:00", cantidadPersonas: 6,
+      cliente: { nombre: "Ana", telefono: "8888-0000" },
+      claveIdempotencia: "idem-rep-separado",
+      repeticiones: 2,
+      horaInicioVuelta2: "10:00",
+    });
+
+    expect(resultado.exito).toBe(true);
+    if (!resultado.exito) return;
+    expect(fake.lotes).toHaveLength(2);
+    expect(fake.heats).toHaveLength(4);
+    expect(fake.asignaciones).toHaveLength(4);
+    // tarifa grupal (4000/persona, >=5) x6 = 24000 por vuelta; x2 = 48000.
+    expect(fake.reservas[0]!.montoTotal).toBe(48000);
+  });
+
+  it("repeticiones=2 sin horario separado cuando la continuacion no cabe -> NO_DISPONIBLE, no crea nada", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    fake.crearBloqueo({ id: "bloqueo-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE, horaInicio: "09:45", horaFin: "10:00" });
+
+    const resultado = await confirmarReserva(comoPrisma(fake), {
+      servicioId: SERVICIO_ID, fecha: FECHA_ISO, horaInicioCandidata: "09:00", cantidadPersonas: 6,
+      cliente: { nombre: "Ana", telefono: "8888-0000" },
+      claveIdempotencia: "idem-rep-sin-horario",
+      repeticiones: 2,
+    });
+
+    expect(resultado.exito).toBe(false);
+    if (resultado.exito) return;
+    expect(resultado.motivo).toBe("NO_DISPONIBLE");
+    expect(fake.reservas).toHaveLength(0);
+    expect(fake.lotes).toHaveLength(0);
+  });
+
+  it("repeticiones=2 con horario separado que ya no cabe (carrera) -> NO_DISPONIBLE, no crea nada", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+
+    const resultado = await confirmarReserva(comoPrisma(fake), {
+      servicioId: SERVICIO_ID, fecha: FECHA_ISO, horaInicioCandidata: "09:00", cantidadPersonas: 5,
+      cliente: { nombre: "Ana", telefono: "8888-0000" },
+      claveIdempotencia: "idem-rep-vuelta2-invalida",
+      repeticiones: 2,
+      horaInicioVuelta2: "20:00", // fuera de horario (cerrado)
+    });
+
+    expect(resultado.exito).toBe(false);
+    if (resultado.exito) return;
+    expect(resultado.motivo).toBe("NO_DISPONIBLE");
+    expect(fake.reservas).toHaveLength(0);
+    expect(fake.lotes).toHaveLength(0);
   });
 });

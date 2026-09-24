@@ -22,6 +22,7 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import {
   construirPlan,
+  construirPlanConRepeticiones,
   horaAMinutos,
   minutosAHora,
   type BloqueDeCalendario,
@@ -30,9 +31,11 @@ import {
   type HoraISO,
   type IdServicio,
   type LotePropuesto,
+  type MotivoNoDisponible,
   type PlanDisponibilidad,
   type PlanDisponible,
   type PlanNoDisponible,
+  type PrecioPropuesto,
 } from "../motor-disponibilidad/motor-disponibilidad.js";
 
 type ClientePrisma = PrismaClient | Prisma.TransactionClient;
@@ -54,6 +57,14 @@ export interface SolicitudConfirmarReserva extends SolicitudConsultarDisponibili
   readonly cliente: DatosClienteReserva;
   /** 8.8.7: evita que un doble clic / reintento de red cree dos reservas. */
   readonly claveIdempotencia: string;
+  /** Vueltas completas solicitadas (precio completo cada una, sin
+   * descuento). 1 (o ausente) = comportamiento identico al de siempre. */
+  readonly repeticiones?: number;
+  /** Solo si `repeticiones` >= 2 y `consultarDisponibilidadRepetida` devolvio
+   * "requiere_horario_separado": horario elegido por el cliente, ese mismo
+   * dia, solo para la vuelta que no cupo justo despues de la primera. Si se
+   * omite, se intenta unicamente que ambas vueltas queden consecutivas. */
+  readonly horaInicioVuelta2?: HoraISO;
 }
 
 // ----------------------------------------------------------------------------
@@ -337,6 +348,84 @@ export async function consultarDisponibilidad(
   solicitud: SolicitudConsultarDisponibilidad,
 ): Promise<PlanDisponibilidadPublico> {
   return aResultadoPublico(await construirPlanDesde(prisma, solicitud));
+}
+
+async function construirPlanRepetidoDesde(
+  cliente: ClientePrisma,
+  solicitud: SolicitudConsultarDisponibilidad,
+  repeticiones: number,
+  reservationIdAIgnorar?: string,
+) {
+  const contexto = await construirContextoDisponibilidad(
+    cliente,
+    solicitud.servicioId,
+    solicitud.fecha,
+    reservationIdAIgnorar,
+  );
+  return construirPlanConRepeticiones(
+    {
+      fecha: solicitud.fecha,
+      horaInicioCandidata: solicitud.horaInicioCandidata,
+      cantidadPersonas: solicitud.cantidadPersonas,
+      servicioId: solicitud.servicioId,
+      contexto,
+    },
+    repeticiones,
+  );
+}
+
+export type PlanRepetidoPublico =
+  | { readonly tipo: "continuo"; readonly plan: PlanDisponiblePublico }
+  | {
+      readonly tipo: "requiere_horario_separado";
+      readonly planPrimeraVuelta: PlanDisponiblePublico;
+      /** Horas del MISMO dia, a partir del fin de la 1a vuelta, donde una
+       * reserva independiente de `cantidadPersonas` (con su propia limpieza)
+       * cabe para la vuelta restante (8.7: nunca antes de la liberacion
+       * operativa de la 1a vuelta, aunque esta nunca se expone tal cual). */
+      readonly horasDisponiblesVuelta2: readonly HoraISO[];
+    }
+  | { readonly tipo: "no_disponible"; readonly motivo: MotivoNoDisponible; readonly detalle?: string };
+
+/**
+ * Version "repeticiones" de `consultarDisponibilidad` (ver
+ * `construirPlanConRepeticiones` en el motor puro): intenta que todas las
+ * vueltas queden consecutivas en un solo plan; si no cabe pero la 1a vuelta
+ * si, devuelve tambien la lista de horas ese mismo dia donde cabria una
+ * reserva independiente solo para la vuelta restante. Puramente
+ * informativa, igual que `consultarDisponibilidad`: no persiste ni bloquea
+ * nada.
+ */
+export async function consultarDisponibilidadRepetida(
+  prisma: PrismaClient,
+  solicitud: SolicitudConsultarDisponibilidad,
+  repeticiones: number,
+): Promise<PlanRepetidoPublico> {
+  const resultado = await construirPlanRepetidoDesde(prisma, solicitud, repeticiones);
+
+  if (resultado.tipo === "continuo") {
+    return { tipo: "continuo", plan: ocultarLimpieza(resultado.plan) };
+  }
+  if (resultado.tipo === "no_disponible") {
+    return resultado;
+  }
+
+  const horaMinimaMin = horaAMinutos(resultado.planPrimeraVuelta.liberacionOperativa);
+  const candidatosDelDia = await consultarDisponibilidadDelDia(
+    prisma,
+    solicitud.servicioId,
+    solicitud.fecha,
+    solicitud.cantidadPersonas,
+  );
+  const horasDisponiblesVuelta2 = candidatosDelDia
+    .filter((c) => c.plan.disponible && horaAMinutos(c.horaInicioCandidata) >= horaMinimaMin)
+    .map((c) => c.horaInicioCandidata);
+
+  return {
+    tipo: "requiere_horario_separado",
+    planPrimeraVuelta: ocultarLimpieza(resultado.planPrimeraVuelta),
+    horasDisponiblesVuelta2,
+  };
 }
 
 export interface CandidatoDelDia {
@@ -645,6 +734,87 @@ export async function calcularYBloquearPlanFinal(
   throw new ConflictoBloqueoInestable();
 }
 
+/**
+ * Version "repeticiones, modo continuo" de `calcularYBloquearPlanFinal`:
+ * mismo mecanismo de estabilizacion bajo lock, pero solo acepta el
+ * resultado si TODAS las vueltas quedaron en un unico plan continuo (ver
+ * `construirPlanConRepeticiones`, tipo "continuo"). Si en cualquier ronda
+ * el resultado es "requiere_horario_separado" o "no_disponible", se trata
+ * como no disponible para este camino (el llamador decide si intentar la
+ * ruta de horarios separados).
+ */
+async function calcularYBloquearPlanContinuoFinal(
+  tx: Prisma.TransactionClient,
+  solicitud: SolicitudConsultarDisponibilidad,
+  repeticiones: number,
+): Promise<ResultadoCalculoPlan> {
+  const heatIdsBloqueados = new Set<string>();
+  const loteIdsBloqueados = new Set<string>();
+
+  let planCandidato = await construirPlanRepetidoDesde(tx, solicitud, repeticiones);
+
+  for (let ronda = 0; ronda < MAX_RONDAS_ESTABILIZACION; ronda++) {
+    if (planCandidato.tipo !== "continuo") {
+      const motivo = planCandidato.tipo === "no_disponible" ? planCandidato.motivo : "SIN_HEATS_CONSECUTIVOS_DISPONIBLES";
+      return { disponible: false, plan: { disponible: false, motivo } };
+    }
+    const plan = planCandidato.plan;
+
+    const { heatIds, loteIds } = idsExistentesDelPlan(plan);
+    const heatIdsNuevos = heatIds.filter((id) => !heatIdsBloqueados.has(id));
+    const loteIdsNuevos = loteIds.filter((id) => !loteIdsBloqueados.has(id));
+
+    if (heatIdsNuevos.length === 0 && loteIdsNuevos.length === 0) {
+      return { disponible: true, plan };
+    }
+
+    await bloquearFilasInvolucradas(tx, heatIdsNuevos, loteIdsNuevos);
+    heatIdsNuevos.forEach((id) => heatIdsBloqueados.add(id));
+    loteIdsNuevos.forEach((id) => loteIdsBloqueados.add(id));
+
+    planCandidato = await construirPlanRepetidoDesde(tx, solicitud, repeticiones);
+  }
+
+  throw new ConflictoBloqueoInestable();
+}
+
+function redondearMonedaLocal(valor: number): number {
+  return Math.round(valor * 100) / 100;
+}
+
+function sumarPrecios(precios: readonly PrecioPropuesto[]): PrecioPropuesto {
+  return precios.reduce<PrecioPropuesto>(
+    (acumulado, precio) => ({
+      moneda: precio.moneda,
+      montoTotal: redondearMonedaLocal(acumulado.montoTotal + precio.montoTotal),
+      montoDeposito: redondearMonedaLocal(acumulado.montoDeposito + precio.montoDeposito),
+      montoSaldo: redondearMonedaLocal(acumulado.montoSaldo + precio.montoSaldo),
+    }),
+    { moneda: precios[0]!.moneda, montoTotal: 0, montoDeposito: 0, montoSaldo: 0 },
+  );
+}
+
+/** Combina 1 o mas planes ya validados/bloqueados en un solo `PlanDisponible`
+ * (varios lotes independientes, cada uno con su propia limpieza, si vienen
+ * de vueltas separadas): mismo shape que un plan multi-lote "normal" de
+ * grupo grande, para que persistencia y respuesta publica no necesiten
+ * distinguir el origen. */
+function combinarPlanes(planes: readonly PlanDisponible[]): PlanDisponible {
+  if (planes.length === 1) return planes[0]!;
+  const ultimoPlan = planes[planes.length - 1]!;
+  const todosConPrecio = planes.every((p) => p.precio !== undefined);
+  return {
+    disponible: true,
+    cantidadLotes: planes.reduce((acumulado, p) => acumulado + p.cantidadLotes, 0),
+    distribucion: planes.flatMap((p) => p.distribucion),
+    lotes: planes.flatMap((p) => p.lotes),
+    horaFinActividadCliente: ultimoPlan.horaFinActividadCliente,
+    liberacionOperativa: ultimoPlan.liberacionOperativa,
+    capacidadesRetenidas: planes.flatMap((p) => p.capacidadesRetenidas),
+    ...(todosConPrecio ? { precio: sumarPrecios(planes.map((p) => p.precio!)) } : {}),
+  };
+}
+
 /** Genera un codigo publico de reserva legible (no es la clave de idempotencia). */
 function generarCodigoPublico(): string {
   return `SRP-${Date.now().toString(36).toUpperCase()}-${Math.floor(Math.random() * 36 ** 4)
@@ -830,11 +1000,37 @@ export async function confirmarReserva(
     try {
       return await prisma.$transaction(
         async (tx) => {
-          const resultado = await calcularYBloquearPlanFinal(tx, solicitud);
-          if (!resultado.disponible) {
-            return { exito: false, motivo: "NO_DISPONIBLE", plan: resultado.plan };
+          const repeticiones = solicitud.repeticiones ?? 1;
+          let planes: readonly PlanDisponible[];
+
+          if (repeticiones <= 1) {
+            const resultado = await calcularYBloquearPlanFinal(tx, solicitud);
+            if (!resultado.disponible) {
+              return { exito: false, motivo: "NO_DISPONIBLE", plan: resultado.plan };
+            }
+            planes = [resultado.plan];
+          } else if (solicitud.horaInicioVuelta2 === undefined) {
+            const resultado = await calcularYBloquearPlanContinuoFinal(tx, solicitud, repeticiones);
+            if (!resultado.disponible) {
+              return { exito: false, motivo: "NO_DISPONIBLE", plan: resultado.plan };
+            }
+            planes = [resultado.plan];
+          } else {
+            const resultadoVuelta1 = await calcularYBloquearPlanFinal(tx, solicitud);
+            if (!resultadoVuelta1.disponible) {
+              return { exito: false, motivo: "NO_DISPONIBLE", plan: resultadoVuelta1.plan };
+            }
+            const resultadoVuelta2 = await calcularYBloquearPlanFinal(tx, {
+              ...solicitud,
+              horaInicioCandidata: solicitud.horaInicioVuelta2,
+            });
+            if (!resultadoVuelta2.disponible) {
+              return { exito: false, motivo: "NO_DISPONIBLE", plan: resultadoVuelta2.plan };
+            }
+            planes = [resultadoVuelta1.plan, resultadoVuelta2.plan];
           }
-          const planFinal = resultado.plan;
+
+          const planFinal = combinarPlanes(planes);
 
           // Persistencia atomica del plan final (8.8.5).
           const reservation = await tx.reservation.create({
@@ -843,6 +1039,7 @@ export async function confirmarReserva(
               servicioId: solicitud.servicioId,
               fecha: fechaISOaDate(solicitud.fecha),
               cantidadPersonas: solicitud.cantidadPersonas,
+              repeticiones,
               estado: "TEMPORAL",
               moneda: planFinal.precio?.moneda ?? "CRC",
               montoTotal: planFinal.precio?.montoTotal ?? 0,
@@ -856,7 +1053,9 @@ export async function confirmarReserva(
             },
           });
 
-          await persistirPlanParaReserva(tx, solicitud.servicioId, solicitud.fecha, reservation.id, planFinal);
+          for (const plan of planes) {
+            await persistirPlanParaReserva(tx, solicitud.servicioId, solicitud.fecha, reservation.id, plan);
+          }
 
           return {
             exito: true,

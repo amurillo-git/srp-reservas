@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   construirPlan,
+  construirPlanConRepeticiones,
   horaAMinutos,
   minutosAHora,
   normalizarLoteTrasLiberacion,
@@ -634,6 +635,158 @@ describe("precio: tarifa escalonada por tamano de grupo", () => {
     expect(resultado.disponible).toBe(true);
     if (!resultado.disponible) return;
     expect(resultado.precio).toBeUndefined();
+  });
+});
+
+describe("construirPlanConRepeticiones", () => {
+  it("repeticiones=1 delega en construirPlan (mismo resultado, tipo continuo)", () => {
+    const solicitud = {
+      fecha: FECHA_PRUEBA,
+      horaInicioCandidata: "09:00",
+      cantidadPersonas: 5,
+      servicioId: SERVICIO_PRUEBA,
+      contexto: crearContextoDiaVacio(),
+    };
+    const directo = construirPlan(solicitud);
+    const resultado = construirPlanConRepeticiones(solicitud, 1);
+
+    expect(resultado.tipo).toBe("continuo");
+    if (resultado.tipo !== "continuo") return;
+    expect(resultado.plan).toEqual(directo);
+  });
+
+  it("5 personas x2 repeticiones en dia vacio -> continuo: 2 heats consecutivos, una sola limpieza al final", () => {
+    const resultado = construirPlanConRepeticiones(
+      {
+        fecha: FECHA_PRUEBA,
+        horaInicioCandidata: "09:00",
+        cantidadPersonas: 5,
+        servicioId: SERVICIO_PRUEBA,
+        contexto: crearContextoDiaVacio(),
+      },
+      2,
+    );
+
+    expect(resultado.tipo).toBe("continuo");
+    if (resultado.tipo !== "continuo") return;
+    expect(resultado.plan.cantidadLotes).toBe(1);
+    expect(resultado.plan.lotes).toHaveLength(1);
+    expect(
+      resultado.plan.lotes[0]!.heats.map((h) => [h.horaInicio, h.horaFin, h.personasAsignadas]),
+    ).toEqual([
+      ["09:00", "09:15", 5],
+      ["09:15", "09:30", 5],
+    ]);
+    expect(resultado.plan.horaFinActividadCliente).toBe("09:30");
+    expect(resultado.plan.liberacionOperativa).toBe("09:45");
+  });
+
+  it("6 personas x2 repeticiones en dia vacio -> continuo: 4 heats de 3, una sola limpieza al final", () => {
+    const resultado = construirPlanConRepeticiones(
+      {
+        fecha: FECHA_PRUEBA,
+        horaInicioCandidata: "09:00",
+        cantidadPersonas: 6,
+        servicioId: SERVICIO_PRUEBA,
+        contexto: crearContextoDiaVacio(),
+      },
+      2,
+    );
+
+    expect(resultado.tipo).toBe("continuo");
+    if (resultado.tipo !== "continuo") return;
+    expect(resultado.plan.lotes).toHaveLength(1);
+    expect(
+      resultado.plan.lotes[0]!.heats.map((h) => [h.horaInicio, h.horaFin, h.personasAsignadas]),
+    ).toEqual([
+      ["09:00", "09:15", 3],
+      ["09:15", "09:30", 3],
+      ["09:30", "09:45", 3],
+      ["09:45", "10:00", 3],
+    ]);
+    expect(resultado.plan.horaFinActividadCliente).toBe("10:00");
+    expect(resultado.plan.liberacionOperativa).toBe("10:15");
+  });
+
+  it("precio continuo = precio de una vuelta x2 (sin descuento)", () => {
+    const tarifa = {
+      servicioId: SERVICIO_PRUEBA,
+      moneda: "CRC",
+      precioPorPersonaGrupoPequeno: 100,
+      precioPorPersonaGrupoGrande: 80,
+      porcentajeDeposito: 50,
+    };
+    const resultado = construirPlanConRepeticiones(
+      {
+        fecha: FECHA_PRUEBA,
+        horaInicioCandidata: "09:00",
+        cantidadPersonas: 5,
+        servicioId: SERVICIO_PRUEBA,
+        contexto: { ...crearContextoDiaVacio(), tarifa },
+      },
+      2,
+    );
+
+    expect(resultado.tipo).toBe("continuo");
+    if (resultado.tipo !== "continuo") return;
+    // una vuelta de 5 personas a tarifa grupal (80) = 400; x2 repeticiones = 800.
+    expect(resultado.plan.precio).toEqual({ moneda: "CRC", montoTotal: 800, montoDeposito: 400, montoSaldo: 400 });
+  });
+
+  it("si la 2a vuelta no cabe justo despues, pero la 1a si -> requiere horario separado (cada vuelta con su propia limpieza)", () => {
+    // 6 personas necesita 2 heats por vuelta (3+3). Bloqueamos el segundo heat
+    // de la 2a vuelta (09:45), que queda FUERA del rango que usaria la 1a
+    // vuelta sola (esta solo llega hasta su limpieza en 09:30-09:45).
+    const contexto = conBloques(crearContextoDiaVacio(), [
+      {
+        tipo: "bloqueado",
+        fecha: FECHA_PRUEBA,
+        horaInicio: "09:45",
+        horaFin: "10:00",
+        idBloqueoAdministrativo: "bloqueo-1",
+      },
+    ]);
+
+    const resultado = construirPlanConRepeticiones(
+      {
+        fecha: FECHA_PRUEBA,
+        horaInicioCandidata: "09:00",
+        cantidadPersonas: 6,
+        servicioId: SERVICIO_PRUEBA,
+        contexto,
+      },
+      2,
+    );
+
+    expect(resultado.tipo).toBe("requiere_horario_separado");
+    if (resultado.tipo !== "requiere_horario_separado") return;
+    expect(resultado.planPrimeraVuelta.lotes).toHaveLength(1);
+    expect(
+      resultado.planPrimeraVuelta.lotes[0]!.heats.map((h) => [h.horaInicio, h.horaFin, h.personasAsignadas]),
+    ).toEqual([
+      ["09:00", "09:15", 3],
+      ["09:15", "09:30", 3],
+    ]);
+    expect(resultado.planPrimeraVuelta.horaFinActividadCliente).toBe("09:30");
+    expect(resultado.planPrimeraVuelta.liberacionOperativa).toBe("09:45");
+  });
+
+  it("si ni siquiera la 1a vuelta cabe -> no_disponible", () => {
+    // Igual que DISP-007: heat a las 11:45 con 5 personas cruza almuerzo (12:00) para la limpieza.
+    const resultado = construirPlanConRepeticiones(
+      {
+        fecha: FECHA_PRUEBA,
+        horaInicioCandidata: "11:45",
+        cantidadPersonas: 5,
+        servicioId: SERVICIO_PRUEBA,
+        contexto: crearContextoDiaVacio(),
+      },
+      2,
+    );
+
+    expect(resultado.tipo).toBe("no_disponible");
+    if (resultado.tipo !== "no_disponible") return;
+    expect(resultado.motivo).toBe("CRUCE_CON_BLOQUE_NO_DISPONIBLE");
   });
 });
 

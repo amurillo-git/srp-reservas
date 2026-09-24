@@ -12,6 +12,39 @@ import { consultarCotizacion, crearReserva } from "@/lib/api";
 import type { EstadoWizard } from "../types";
 import type { PlanDisponibilidad } from "@/lib/types";
 
+/** Suma dos precios (misma moneda): usado cuando la 2a vuelta quedo en un
+ * horario separado (cada vuelta se cotiza por separado). */
+function sumarPrecios(a: PlanDisponibilidad, b: PlanDisponibilidad): PlanDisponibilidad {
+  if (!a.disponible) return a;
+  if (!b.disponible) return b;
+  const precio =
+    a.precio && b.precio
+      ? {
+          moneda: a.precio.moneda,
+          montoTotal: a.precio.montoTotal + b.precio.montoTotal,
+          montoDeposito: a.precio.montoDeposito + b.precio.montoDeposito,
+          montoSaldo: a.precio.montoSaldo + b.precio.montoSaldo,
+        }
+      : undefined;
+  return { ...a, precio };
+}
+
+/** Duplica el precio de una sola vuelta: usado cuando ambas vueltas quedaron
+ * consecutivas (mismo precio por vuelta, sin descuento). */
+function duplicarPrecio(plan: PlanDisponibilidad): PlanDisponibilidad {
+  if (!plan.disponible || !plan.precio) return plan;
+  const { precio } = plan;
+  return {
+    ...plan,
+    precio: {
+      moneda: precio.moneda,
+      montoTotal: precio.montoTotal * 2,
+      montoDeposito: precio.montoDeposito * 2,
+      montoSaldo: precio.montoSaldo * 2,
+    },
+  };
+}
+
 export function ReviewStep({
   estado,
   onConfirmado,
@@ -23,27 +56,45 @@ export function ReviewStep({
   onSinDisponibilidad: () => void;
   onBack: () => void;
 }) {
-  const { servicio, fecha, horaInicio, cantidadPersonas, cliente } = estado;
+  const { servicio, fecha, horaInicio, horaInicioVuelta2, repeticiones, cantidadPersonas, cliente } = estado;
   const [cotizacion, setCotizacion] = useState<PlanDisponibilidad | null>(null);
   const [enviando, setEnviando] = useState(false);
 
   useEffect(() => {
     if (!fecha || !horaInicio || !cantidadPersonas) return;
     let cancelado = false;
-    consultarCotizacion(servicio.id, fecha, horaInicio, cantidadPersonas)
-      .then((plan) => !cancelado && setCotizacion(plan))
-      .catch(() => !cancelado && toast.error("No pudimos calcular el precio. Intentá de nuevo."));
+    async function cargar() {
+      const planVuelta1 = await consultarCotizacion(servicio.id, fecha!, horaInicio!, cantidadPersonas!);
+      if (cancelado) return;
+      if (repeticiones !== 2) {
+        setCotizacion(planVuelta1);
+      } else if (horaInicioVuelta2) {
+        const planVuelta2 = await consultarCotizacion(servicio.id, fecha!, horaInicioVuelta2, cantidadPersonas!);
+        if (!cancelado) setCotizacion(sumarPrecios(planVuelta1, planVuelta2));
+      } else {
+        setCotizacion(duplicarPrecio(planVuelta1));
+      }
+    }
+    cargar().catch(() => !cancelado && toast.error("No pudimos calcular el precio. Intentá de nuevo."));
     return () => {
       cancelado = true;
     };
-  }, [servicio.id, fecha, horaInicio, cantidadPersonas]);
+  }, [servicio.id, fecha, horaInicio, horaInicioVuelta2, repeticiones, cantidadPersonas]);
 
   async function confirmar() {
     if (!fecha || !horaInicio || !cantidadPersonas || !cliente) return;
     setEnviando(true);
     try {
       const resultado = await crearReserva(
-        { serviceId: servicio.id, date: fecha, startTime: horaInicio, partySize: cantidadPersonas, customer: cliente },
+        {
+          serviceId: servicio.id,
+          date: fecha,
+          startTime: horaInicio,
+          partySize: cantidadPersonas,
+          customer: cliente,
+          repetitions: repeticiones,
+          secondRoundStartTime: horaInicioVuelta2 ?? undefined,
+        },
         estado.idempotencyKey,
       );
       if (resultado.exito) {
@@ -78,8 +129,19 @@ export function ReviewStep({
         <dl className="grid grid-cols-2 gap-y-3 text-sm">
           <dt className="text-muted-foreground">Fecha</dt>
           <dd className="text-right font-medium">{formatoFechaLarga(fecha)}</dd>
-          <dt className="text-muted-foreground">Hora</dt>
-          <dd className="text-right font-medium">{horaInicio}</dd>
+          {repeticiones === 2 ? (
+            <>
+              <dt className="text-muted-foreground">1ª vuelta</dt>
+              <dd className="text-right font-medium">{horaInicio}</dd>
+              <dt className="text-muted-foreground">2ª vuelta</dt>
+              <dd className="text-right font-medium">{horaInicioVuelta2 ?? "Justo después de la 1ª"}</dd>
+            </>
+          ) : (
+            <>
+              <dt className="text-muted-foreground">Hora</dt>
+              <dd className="text-right font-medium">{horaInicio}</dd>
+            </>
+          )}
           <dt className="text-muted-foreground">Personas</dt>
           <dd className="text-right font-medium">{cantidadPersonas}</dd>
           <dt className="text-muted-foreground">Nombre</dt>
