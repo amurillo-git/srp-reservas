@@ -80,11 +80,6 @@ export function PartySizeStep({
               2 Heats (30 minutos)
             </Button>
           </div>
-          {repeticiones === 2 && (
-            <p className="text-muted-foreground text-center text-xs">
-              Se cobra el precio completo de cada vuelta, sin descuento.
-            </p>
-          )}
         </div>
 
         <Button size="lg" className="rounded-2xl" onClick={() => onSubmit(cantidad, repeticiones)}>
