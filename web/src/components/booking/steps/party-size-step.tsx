@@ -69,7 +69,7 @@ export function PartySizeStep({
               className="rounded-2xl"
               onClick={() => setRepeticiones(1)}
             >
-              1 vuelta
+              1 Heat (15 minutos)
             </Button>
             <Button
               type="button"
@@ -77,7 +77,7 @@ export function PartySizeStep({
               className="rounded-2xl"
               onClick={() => setRepeticiones(2)}
             >
-              2 vueltas
+              2 Heats (30 minutos)
             </Button>
           </div>
           {repeticiones === 2 && (
