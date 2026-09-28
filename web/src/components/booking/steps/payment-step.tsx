@@ -18,6 +18,7 @@ import {
 } from "@/lib/api";
 
 const SINPE_PHONE = process.env.NEXT_PUBLIC_SINPE_PHONE ?? "0000-0000";
+const SINPE_NOMBRE = process.env.NEXT_PUBLIC_SINPE_NOMBRE ?? "";
 const MINUTOS_RETENCION = 30;
 
 export function PaymentStep({
@@ -136,6 +137,12 @@ function PagoSinpeManual({
           <span>Número SINPE</span>
           <span className="font-semibold">{SINPE_PHONE}</span>
         </div>
+        {SINPE_NOMBRE && (
+          <div className="mt-1 flex items-center justify-between">
+            <span>Nombre registrado</span>
+            <span className="font-semibold">{SINPE_NOMBRE}</span>
+          </div>
+        )}
         {deposito && (
           <div className="mt-1 flex items-center justify-between">
             <span>Monto a transferir</span>
