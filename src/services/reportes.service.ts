@@ -198,6 +198,9 @@ export interface ReservaBusqueda extends ReservaResumen {
    * en horarios separados = 2), ordenado. Vacio si la reserva ya no tiene
    * asignaciones activas (cancelada, expirada, rechazada). */
   readonly horarios: readonly HorarioReserva[];
+  /** Respaldo ante reclamos: instante (ISO, UTC) en que el cliente acepto las
+   * normas de uso al reservar; null si no hay registro (reservas anteriores). */
+  readonly normasAceptadasEn: string | null;
 }
 
 /** Tope duro de resultados (14.5): esta pantalla es para encontrar UNA
@@ -305,6 +308,7 @@ export async function buscarReservas(
       montoSaldo: Number(reserva.montoSaldo),
       moneda: reserva.moneda,
       horarios: horarios.get(reserva.id) ?? [],
+      normasAceptadasEn: reserva.normasAceptadasEn ? reserva.normasAceptadasEn.toISOString() : null,
     }))
     .sort(compararCronologicamente);
 }

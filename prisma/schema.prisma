@@ -276,6 +276,11 @@ model Reservation {
   /// Vueltas completas pedidas por el cliente (precio completo cada una,
   /// sin descuento). 1 = comportamiento de siempre.
   repeticiones        Int           @default(1) @map("repeticiones")
+  /// Respaldo ante reclamos: cuando (hora del servidor) acepto el cliente las
+  /// normas de uso del parque al reservar, y que version del texto vio. Null en
+  /// reservas anteriores a este registro o que no pasaron por la web publica.
+  normasAceptadasEn   DateTime?     @map("normas_aceptadas_en")
+  normasVersion       String?       @map("normas_version") @db.VarChar(40)
   estado              EstadoReserva @default(TEMPORAL)
   moneda              String        @db.VarChar(3)
   montoTotal          Decimal       @map("monto_total") @db.Decimal(10, 2)

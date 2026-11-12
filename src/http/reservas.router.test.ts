@@ -40,6 +40,9 @@ async function tokenAdminDePrueba(fake: FakePrisma, rol: string = "ADMINISTRADOR
   return `Bearer ${emitirToken({ userId, email, rol })}`;
 }
 
+/** Aceptacion de las normas de uso que la web envia al crear una reserva. */
+const ACEPTACION_NORMAS = { rulesAccepted: true, rulesVersion: "2026-11-11" };
+
 const SERVICIO_ID = "svc-1";
 const FECHA_ISO = "2026-09-13";
 const FECHA_DATE = new Date("2026-09-13T00:00:00.000Z");
@@ -150,7 +153,47 @@ describe("POST /api/reservations", () => {
     startTime: "09:00",
     partySize: 5,
     customer: { name: "Ana", phone: "8888-0000" },
+    ...ACEPTACION_NORMAS,
   };
+
+  it("exige que el cliente acepte las normas de uso: sin aceptacion devuelve 400 y no crea nada", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const { rulesAccepted: _a, rulesVersion: _v, ...sinAceptacion } = solicitudValida;
+
+    const sinCampos = await request(app).post("/api/reservations").set("Idempotency-Key", "idem-normas-1").send(sinAceptacion);
+    const noAceptadas = await request(app)
+      .post("/api/reservations")
+      .set("Idempotency-Key", "idem-normas-2")
+      .send({ ...sinAceptacion, rulesAccepted: false, rulesVersion: "2026-11-11" });
+    const sinVersion = await request(app)
+      .post("/api/reservations")
+      .set("Idempotency-Key", "idem-normas-3")
+      .send({ ...sinAceptacion, rulesAccepted: true });
+
+    expect(sinCampos.status).toBe(400);
+    expect(noAceptadas.status).toBe(400);
+    expect(sinVersion.status).toBe(400);
+    expect(fake.reservas).toHaveLength(0);
+  });
+
+  it("guarda el registro de aceptacion de normas (fecha y version) en la reserva", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const antes = Date.now();
+
+    const respuesta = await request(crearApp(comoPrisma(fake)))
+      .post("/api/reservations")
+      .set("Idempotency-Key", "idem-normas-registro")
+      .send(solicitudValida);
+
+    expect(respuesta.status).toBe(201);
+    expect(fake.reservas[0]!.normasVersion).toBe("2026-11-11");
+    const aceptadaEn = fake.reservas[0]!.normasAceptadasEn;
+    expect(aceptadaEn).toBeInstanceOf(Date);
+    expect(aceptadaEn!.getTime()).toBeGreaterThanOrEqual(antes);
+  });
 
   it("exige el encabezado Idempotency-Key", async () => {
     const app = crearApp(comoPrisma(new FakePrisma()));
@@ -285,6 +328,7 @@ describe("GET /api/reservations/:publicCode", () => {
       .send({
         serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "09:00", partySize: 5,
         customer: { name: "Ana", phone: "8888-0000" },
+        ...ACEPTACION_NORMAS,
       });
     const codigoPublico: string = creacion.body.codigoPublico;
 
@@ -316,6 +360,7 @@ describe("GET /api/reservations/:publicCode", () => {
       .send({
         serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "09:00", partySize: 5,
         customer: { name: "Ana", phone: "8888-0000" },
+        ...ACEPTACION_NORMAS,
       });
     const codigoPublico: string = creacion.body.codigoPublico;
 
@@ -339,6 +384,7 @@ describe("GET /api/reservations/:publicCode", () => {
       .send({
         serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "09:00", partySize: 5,
         customer: { name: "Ana", phone: "8888-0000" },
+        ...ACEPTACION_NORMAS,
       });
     const codigoPublico: string = creacion.body.codigoPublico;
     await request(app).post(`/api/reservations/${codigoPublico}/sinpe-evidence`).send({});
@@ -362,6 +408,7 @@ describe("flujo SINPE (POST .../sinpe-evidence, admin confirm/reject-sinpe)", ()
       .send({
         serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "09:00", partySize: 5,
         customer: { name: "Ana", phone: "8888-0000" },
+        ...ACEPTACION_NORMAS,
       });
     return creacion.body.codigoPublico as string;
   }
@@ -504,6 +551,7 @@ describe("flujo de pago con tarjeta (POST .../card-payment, POST /webhooks/onvo)
       .send({
         serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "09:00", partySize: 5,
         customer: { name: "Ana", phone: "8888-0000" },
+        ...ACEPTACION_NORMAS,
       });
     return creacion.body.codigoPublico as string;
   }
@@ -628,6 +676,7 @@ describe("flujo SINPE automatico via ONVO (POST .../sinpe-intent, 25)", () => {
       .send({
         serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "09:00", partySize: 5,
         customer: { name: "Ana", phone: "8888-0000" },
+        ...ACEPTACION_NORMAS,
       });
     return creacion.body.codigoPublico as string;
   }
@@ -704,6 +753,7 @@ describe("cobro de saldo al llegar al parque (POST /admin/reservations/:code/bal
       .send({
         serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "09:00", partySize: 5,
         customer: { name: "Ana", phone: "8888-0000" },
+        ...ACEPTACION_NORMAS,
       });
     const codigoPublico: string = creacion.body.codigoPublico;
     await request(app).post(`/api/reservations/${codigoPublico}/sinpe-evidence`).send({});
@@ -987,6 +1037,7 @@ describe("/api/admin/blocks", () => {
       .send({
         serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "09:00", partySize: 5,
         customer: { name: "Ana", phone: "8888-0000" },
+        ...ACEPTACION_NORMAS,
       });
     return creacion.body.codigoPublico as string;
   }
@@ -1176,6 +1227,7 @@ describe("/api/admin/reservations/:publicCode/cancel y /reschedule (14.5-14.6)",
       .send({
         serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: "09:00", partySize: 5,
         customer: { name: "Ana", phone: "8888-0000" },
+        ...ACEPTACION_NORMAS,
       });
     const codigoPublico = creacion.body.codigoPublico as string;
     await request(app).post(`/api/reservations/${codigoPublico}/sinpe-evidence`).send({});

@@ -127,6 +127,8 @@ export interface FilaReserva {
   fecha: Date;
   cantidadPersonas: number;
   repeticiones?: number;
+  normasAceptadasEn?: Date | null;
+  normasVersion?: string | null;
   estado: string;
   moneda: string;
   montoTotal: number;

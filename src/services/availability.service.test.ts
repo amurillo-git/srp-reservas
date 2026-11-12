@@ -284,6 +284,37 @@ describe("confirmarReserva", () => {
     expect(fake.asignaciones[0]!.cantidadParticipantes).toBe(5);
   });
 
+  it("guarda cuando y que version de las normas acepto el cliente, usando la hora del servidor", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const antes = Date.now();
+
+    const resultado = await confirmarReserva(comoPrisma(fake), {
+      servicioId: SERVICIO_ID, fecha: FECHA_ISO, horaInicioCandidata: "09:00", cantidadPersonas: 5,
+      cliente: { nombre: "Ana", telefono: "8888-0000" },
+      claveIdempotencia: "idem-normas",
+      normasVersion: "2026-11-11",
+    });
+
+    expect(resultado.exito).toBe(true);
+    expect(fake.reservas[0]!.normasVersion).toBe("2026-11-11");
+    expect(fake.reservas[0]!.normasAceptadasEn!.getTime()).toBeGreaterThanOrEqual(antes);
+  });
+
+  it("sin version de normas (reservas que no pasan por la web publica) no se registra aceptacion", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+
+    await confirmarReserva(comoPrisma(fake), {
+      servicioId: SERVICIO_ID, fecha: FECHA_ISO, horaInicioCandidata: "09:00", cantidadPersonas: 5,
+      cliente: { nombre: "Ana", telefono: "8888-0000" },
+      claveIdempotencia: "idem-sin-normas",
+    });
+
+    expect(fake.reservas[0]!.normasAceptadasEn ?? null).toBeNull();
+    expect(fake.reservas[0]!.normasVersion ?? null).toBeNull();
+  });
+
   it("una segunda confirmacion con la misma clave de idempotencia no crea una segunda reserva (8.8.7)", async () => {
     const fake = new FakePrisma();
     crearFixtureBase(fake);

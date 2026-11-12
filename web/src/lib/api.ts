@@ -100,6 +100,10 @@ export interface SolicitudCrearReserva {
   readonly repetitions?: number;
   /** Solo si `repetitions` >= 2 y la 2a vuelta no cupo justo despues de la 1a. */
   readonly secondRoundStartTime?: string;
+  /** El cliente acepto las normas de uso del parque (obligatorio para reservar). */
+  readonly rulesAccepted: true;
+  /** Version del texto de normas que vio (ver VERSION_NORMAS); se guarda como respaldo. */
+  readonly rulesVersion: string;
 }
 
 /** 8.8.7: idempotencyKey debe ser generada y conservada por el llamador (un

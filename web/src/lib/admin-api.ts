@@ -283,6 +283,9 @@ export interface ReservaBusqueda {
   /** Un horario por lote ("HH:mm", 24 h), ordenado; vacio si la reserva ya no
    * tiene asignaciones activas (cancelada, expirada, rechazada). */
   readonly horarios: readonly { readonly horaInicio: string; readonly horaFin: string }[];
+  /** Instante ISO (UTC) en que el cliente acepto las normas de uso al reservar;
+   * null si no hay registro (reservas anteriores a este respaldo). */
+  readonly normasAceptadasEn: string | null;
 }
 
 export interface FiltrosBusquedaReservas {

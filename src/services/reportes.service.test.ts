@@ -213,6 +213,20 @@ describe("buscarReservas", () => {
     expect(resultado.map((r) => r.codigoPublico)).toEqual(["SRP-1", "SRP-2"]);
   });
 
+  it("incluye cuando se aceptaron las normas (ISO) o null si no hay registro", async () => {
+    const fake = new FakePrisma();
+    crearReserva(fake, {
+      id: "con", fecha: new Date("2026-09-10"),
+      normasAceptadasEn: new Date("2026-09-01T18:30:00.000Z"), normasVersion: "2026-11-11",
+    });
+    crearReserva(fake, { id: "sin", fecha: new Date("2026-09-11") });
+
+    const resultado = await buscarReservas(comoPrisma(fake), SERVICIO_ID, {});
+
+    expect(resultado.find((r) => r.codigoPublico === "SRP-con")!.normasAceptadasEn).toBe("2026-09-01T18:30:00.000Z");
+    expect(resultado.find((r) => r.codigoPublico === "SRP-sin")!.normasAceptadasEn).toBeNull();
+  });
+
   describe("horario de cada reserva", () => {
     /** Crea un lote con heats consecutivos y le asigna la reserva dada. */
     function asignarHeats(

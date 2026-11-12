@@ -1,5 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { formatoHora12, formatoRangoHora12, horarioEnHoraActual, reservaEnHoraActual } from "./format";
+import {
+  formatoFechaHora12,
+  formatoHora12,
+  formatoRangoHora12,
+  horarioEnHoraActual,
+  reservaEnHoraActual,
+} from "./format";
+
+describe("formatoFechaHora12", () => {
+  it("muestra dia/mes/anio y la hora en 12 horas, en la hora local", () => {
+    expect(formatoFechaHora12(new Date(2026, 10, 11, 19, 20).toISOString())).toBe("11/11/2026 7:20 PM");
+    expect(formatoFechaHora12(new Date(2026, 0, 5, 0, 5).toISOString())).toBe("05/01/2026 12:05 AM");
+  });
+
+  it("deja intacto un valor que no es una fecha", () => {
+    expect(formatoFechaHora12("no-es-fecha")).toBe("no-es-fecha");
+  });
+});
 
 describe("formatoHora12", () => {
   it("convierte horas de la manana a AM sin cero a la izquierda", () => {

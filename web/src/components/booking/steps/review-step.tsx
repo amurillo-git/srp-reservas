@@ -9,6 +9,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatoFechaLarga, formatoHora12, formatoMoneda } from "@/lib/format";
 import { consultarCotizacion, crearReserva } from "@/lib/api";
+import { NormasDeUso, VERSION_NORMAS } from "../park-rules";
 import type { EstadoWizard } from "../types";
 import type { PlanDisponibilidad } from "@/lib/types";
 
@@ -59,6 +60,7 @@ export function ReviewStep({
   const { servicio, fecha, horaInicio, horaInicioVuelta2, repeticiones, cantidadPersonas, cliente } = estado;
   const [cotizacion, setCotizacion] = useState<PlanDisponibilidad | null>(null);
   const [enviando, setEnviando] = useState(false);
+  const [aceptaNormas, setAceptaNormas] = useState(false);
 
   useEffect(() => {
     if (!fecha || !horaInicio || !cantidadPersonas) return;
@@ -82,7 +84,7 @@ export function ReviewStep({
   }, [servicio.id, fecha, horaInicio, horaInicioVuelta2, repeticiones, cantidadPersonas]);
 
   async function confirmar() {
-    if (!fecha || !horaInicio || !cantidadPersonas || !cliente) return;
+    if (!fecha || !horaInicio || !cantidadPersonas || !cliente || !aceptaNormas) return;
     setEnviando(true);
     try {
       const resultado = await crearReserva(
@@ -94,6 +96,8 @@ export function ReviewStep({
           customer: cliente,
           repetitions: repeticiones,
           secondRoundStartTime: horaInicioVuelta2 ?? undefined,
+          rulesAccepted: true,
+          rulesVersion: VERSION_NORMAS,
         },
         estado.idempotencyKey,
       );
@@ -171,11 +175,31 @@ export function ReviewStep({
           </div>
         ) : null}
 
+        <NormasDeUso />
+
+        <label htmlFor="acepta-normas" className="flex cursor-pointer items-start gap-3 text-sm font-medium">
+          <input
+            id="acepta-normas"
+            type="checkbox"
+            className="mt-0.5 size-5 shrink-0 accent-primary"
+            checked={aceptaNormas}
+            onChange={(e) => setAceptaNormas(e.target.checked)}
+            disabled={enviando}
+          />
+          Acepto las normas de uso del parque
+        </label>
+
         <div className="flex gap-3">
           <Button type="button" variant="ghost" className="rounded-2xl" onClick={onBack} disabled={enviando}>
             Atrás
           </Button>
-          <Button type="button" size="lg" className="flex-1 rounded-2xl" onClick={confirmar} disabled={enviando}>
+          <Button
+            type="button"
+            size="lg"
+            className="flex-1 rounded-2xl"
+            onClick={confirmar}
+            disabled={enviando || !aceptaNormas}
+          >
             <CheckCircle2 className="size-4" />
             {enviando ? "Confirmando..." : "Confirmar y reservar"}
           </Button>

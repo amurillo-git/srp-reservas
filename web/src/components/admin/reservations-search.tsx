@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { consultarReserva, obtenerConfiguracionPago, type ModoSinpe } from "@/lib/api";
-import { formatoHora12, formatoMoneda, hoyISO, reservaEnHoraActual } from "@/lib/format";
+import { formatoFechaHora12, formatoHora12, formatoMoneda, hoyISO, reservaEnHoraActual } from "@/lib/format";
 import { TimeInput12h } from "./time-input-12h";
 import {
   ajustarAsistentesAdmin,
@@ -247,6 +247,11 @@ export function ReservationsSearch({ token, serviceId }: { token: string; servic
                   <p className="text-xs text-muted-foreground">
                     {r.codigoPublico} · {r.clienteTelefono} · {r.fecha} · {r.cantidadPersonas} personas
                     {r.vecesReprogramada > 0 ? ` · reprogramada ${r.vecesReprogramada}x` : ""}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {r.normasAceptadasEn
+                      ? `Normas aceptadas: ${formatoFechaHora12(r.normasAceptadasEn)}`
+                      : "Sin registro de aceptación de normas"}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">

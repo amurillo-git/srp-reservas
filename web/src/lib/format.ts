@@ -38,6 +38,17 @@ export function formatoHora12(hora: string): string {
   return `${horas12}:${coincidencia[2]} ${periodo}`;
 }
 
+/** Instante ISO (ej. "2026-11-12T01:20:00.000Z") -> "11/11/2026 7:20 PM", en la
+ * hora local del navegador. Un valor que no es una fecha se devuelve tal cual. */
+export function formatoFechaHora12(iso: string): string {
+  const fecha = new Date(iso);
+  if (Number.isNaN(fecha.getTime())) return iso;
+  const dia = String(fecha.getDate()).padStart(2, "0");
+  const mes = String(fecha.getMonth() + 1).padStart(2, "0");
+  const hora = `${String(fecha.getHours()).padStart(2, "0")}:${String(fecha.getMinutes()).padStart(2, "0")}`;
+  return `${dia}/${mes}/${fecha.getFullYear()} ${formatoHora12(hora)}`;
+}
+
 /** "09:00", "09:30" -> "9:00 AM – 9:30 AM". */
 export function formatoRangoHora12(inicio: string, fin: string): string {
   return `${formatoHora12(inicio)} – ${formatoHora12(fin)}`;

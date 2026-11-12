@@ -272,7 +272,8 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
         return enviarError(res, 400, 'El encabezado "Idempotency-Key" es requerido');
       }
 
-      const { serviceId, date, startTime, partySize, customer, repetitions, secondRoundStartTime } = req.body ?? {};
+      const { serviceId, date, startTime, partySize, customer, repetitions, secondRoundStartTime, rulesAccepted, rulesVersion } =
+        req.body ?? {};
 
       if (typeof serviceId !== "string" || serviceId.length === 0) {
         return enviarError(res, 400, "serviceId es requerido");
@@ -311,6 +312,14 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
       if (secondRoundStartTime !== undefined && !PATRON_HORA.test(secondRoundStartTime)) {
         return enviarError(res, 400, "secondRoundStartTime debe tener el formato HH:mm");
       }
+      // Respaldo ante reclamos: sin aceptacion de las normas de uso no se crea
+      // la reserva (la hora de aceptacion la pone el servidor, no el cliente).
+      if (rulesAccepted !== true) {
+        return enviarError(res, 400, "Debes aceptar las normas de uso del parque para reservar");
+      }
+      if (typeof rulesVersion !== "string" || rulesVersion.trim().length === 0 || rulesVersion.length > 40) {
+        return enviarError(res, 400, "rulesVersion es requerido (texto de hasta 40 caracteres)");
+      }
 
       const resultado = await confirmarReserva(prisma, {
         servicioId: serviceId,
@@ -321,6 +330,7 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
         claveIdempotencia,
         repeticiones: repeticionesValidas,
         horaInicioVuelta2: secondRoundStartTime,
+        normasVersion: rulesVersion.trim(),
       });
 
       if (resultado.exito) {

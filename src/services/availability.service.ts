@@ -65,6 +65,10 @@ export interface SolicitudConfirmarReserva extends SolicitudConsultarDisponibili
    * dia, solo para la vuelta que no cupo justo despues de la primera. Si se
    * omite, se intenta unicamente que ambas vueltas queden consecutivas. */
   readonly horaInicioVuelta2?: HoraISO;
+  /** Version del texto de normas de uso que el cliente acepto al reservar
+   * (web publica). Si viene, se guarda junto con la hora del servidor como
+   * respaldo ante reclamos; si se omite no se registra aceptacion. */
+  readonly normasVersion?: string;
 }
 
 // ----------------------------------------------------------------------------
@@ -1046,6 +1050,9 @@ export async function confirmarReserva(
               montoDeposito: planFinal.precio?.montoDeposito ?? 0,
               montoSaldo: planFinal.precio?.montoSaldo ?? 0,
               claveIdempotencia: solicitud.claveIdempotencia,
+              ...(solicitud.normasVersion
+                ? { normasAceptadasEn: new Date(), normasVersion: solicitud.normasVersion }
+                : {}),
               clienteNombre: solicitud.cliente.nombre,
               clienteTelefono: solicitud.cliente.telefono,
               clienteEmail: solicitud.cliente.email,
