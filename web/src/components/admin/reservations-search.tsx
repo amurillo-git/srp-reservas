@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { consultarReserva, obtenerConfiguracionPago, type ModoSinpe } from "@/lib/api";
-import { formatoHora12, formatoMoneda, reservaEnHoraActual } from "@/lib/format";
+import { formatoHora12, formatoMoneda, hoyISO, reservaEnHoraActual } from "@/lib/format";
 import { TimeInput12h } from "./time-input-12h";
 import {
   ajustarAsistentesAdmin,
@@ -90,17 +90,28 @@ export function ReservationsSearch({ token, serviceId }: { token: string; servic
     return () => clearInterval(id);
   }, []);
 
-  async function buscar() {
+  async function buscar(filtrosABuscar: Filtros = filtros) {
     setBuscando(true);
     const encontradas = await buscarReservasAdmin(token, serviceId, {
-      q: filtros.q.trim() || undefined,
-      status: filtros.status || undefined,
-      from: filtros.from || undefined,
-      to: filtros.to || undefined,
+      q: filtrosABuscar.q.trim() || undefined,
+      status: filtrosABuscar.status || undefined,
+      from: filtrosABuscar.from || undefined,
+      to: filtrosABuscar.to || undefined,
     });
     setResultados(encontradas);
     setBuscando(false);
   }
+
+  // Al abrir la pestaña, "Desde" arranca en la fecha de hoy y la lista se carga
+  // sola: solo se ven las reservas de hoy en adelante, no las del pasado. Se
+  // calcula aqui (no en el estado inicial) porque la fecha depende del
+  // navegador de quien abre la pantalla.
+  useEffect(() => {
+    const iniciales: Filtros = { ...FILTROS_VACIOS, from: hoyISO() };
+    setFiltros(iniciales);
+    void buscar(iniciales);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function cancelar(codigoPublico: string) {
     if (!window.confirm(`¿Cancelar la reserva ${codigoPublico}? Esta acción no se puede deshacer.`)) return;
@@ -206,7 +217,7 @@ export function ReservationsSearch({ token, serviceId }: { token: string; servic
             />
           </div>
         </div>
-        <Button size="sm" className="w-fit" onClick={buscar} disabled={buscando}>
+        <Button size="sm" className="w-fit" onClick={() => buscar()} disabled={buscando}>
           {buscando ? "Buscando..." : "Buscar"}
         </Button>
 
