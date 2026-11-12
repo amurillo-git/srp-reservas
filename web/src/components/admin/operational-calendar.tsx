@@ -12,7 +12,7 @@ import {
   type CalendarioOperativoDelDia,
   type HeatOperativo,
 } from "@/lib/admin-api";
-import { hoyISO } from "@/lib/format";
+import { formatoHora12, formatoRangoHora12, hoyISO } from "@/lib/format";
 
 const DIAS_CORTOS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 
@@ -159,8 +159,10 @@ export function OperationalCalendar({ token, serviceId }: { token: string; servi
         {calendario !== null &&
           calendario.ventanas.map((v, i) => (
             <p key={i} className="text-sm text-muted-foreground">
-              Horario: {v.horaApertura}–{v.horaCierre}
-              {v.almuerzoInicio ? ` (almuerzo ${v.almuerzoInicio}–${v.almuerzoFin})` : ""}
+              Horario: {formatoRangoHora12(v.horaApertura, v.horaCierre)}
+              {v.almuerzoInicio && v.almuerzoFin
+                ? ` (almuerzo ${formatoRangoHora12(v.almuerzoInicio, v.almuerzoFin)})`
+                : ""}
             </p>
           ))}
 
@@ -171,9 +173,9 @@ export function OperationalCalendar({ token, serviceId }: { token: string; servi
         {calendario?.lotes.map((lote) => (
           <div key={lote.loteId} className="flex flex-col gap-2 rounded-lg bg-muted/50 p-3 text-sm">
             <p className="font-medium">
-              Lote {lote.horaInicio}–{lote.horaFinUltimoHeat}
+              Lote {formatoRangoHora12(lote.horaInicio, lote.horaFinUltimoHeat)}
               <span className="ml-2 font-normal text-muted-foreground">
-                limpieza {lote.horaInicioLimpieza}–{lote.horaFinLimpieza}
+                limpieza {formatoRangoHora12(lote.horaInicioLimpieza, lote.horaFinLimpieza)}
               </span>
             </p>
             <div className="flex flex-col gap-1">
@@ -186,7 +188,7 @@ export function OperationalCalendar({ token, serviceId }: { token: string; servi
                       className="flex w-full items-center justify-between gap-2"
                       onClick={() => setHeatExpandido(expandido ? null : heat.heatId)}
                     >
-                      <span>{heat.horaInicio}</span>
+                      <span>{formatoHora12(heat.horaInicio)}</span>
                       <span className="flex items-center gap-2">
                         <span className="text-xs text-muted-foreground">
                           {ocupados}/{heat.capacidadMaxima}
@@ -220,7 +222,7 @@ export function OperationalCalendar({ token, serviceId }: { token: string; servi
             {calendario.bloqueos.map((b) => (
               <div key={b.id} className="flex items-center justify-between gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm">
                 <span>
-                  {b.horaInicio}–{b.horaFin}
+                  {formatoRangoHora12(b.horaInicio, b.horaFin)}
                 </span>
                 <span className="text-xs text-muted-foreground">{b.motivo ?? "Sin motivo"}</span>
               </div>

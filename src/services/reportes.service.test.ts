@@ -202,15 +202,101 @@ describe("reservasVencidas", () => {
 });
 
 describe("buscarReservas", () => {
-  it("sin filtros devuelve las reservas del servicio, mas recientes primero", async () => {
+  it("sin filtros devuelve las reservas del servicio en orden cronologico (fecha ascendente)", async () => {
     const fake = new FakePrisma();
-    crearReserva(fake, { id: "1", fecha: new Date("2026-09-10") });
     crearReserva(fake, { id: "2", fecha: new Date("2026-09-12") });
+    crearReserva(fake, { id: "1", fecha: new Date("2026-09-10") });
     crearReserva(fake, { id: "3", fecha: new Date("2026-09-11"), servicioId: "otro-servicio" });
 
     const resultado = await buscarReservas(comoPrisma(fake), SERVICIO_ID, {});
 
-    expect(resultado.map((r) => r.codigoPublico)).toEqual(["SRP-2", "SRP-1"]);
+    expect(resultado.map((r) => r.codigoPublico)).toEqual(["SRP-1", "SRP-2"]);
+  });
+
+  describe("horario de cada reserva", () => {
+    /** Crea un lote con heats consecutivos y le asigna la reserva dada. */
+    function asignarHeats(
+      fake: FakePrisma,
+      reservationId: string,
+      fecha: Date,
+      loteId: string,
+      horas: readonly (readonly [string, string])[],
+      estado: "ACTIVA" | "LIBERADA" = "ACTIVA",
+    ): void {
+      fake.crearLote({
+        id: loteId, servicioId: SERVICIO_ID, fecha,
+        horaInicio: horas[0]![0], horaFinUltimoHeat: horas[horas.length - 1]![1],
+        horaInicioLimpieza: horas[horas.length - 1]![1], horaFinLimpieza: horas[horas.length - 1]![1],
+        cantidadHeats: horas.length,
+      });
+      horas.forEach(([horaInicio, horaFin], i) => {
+        const heat = fake.crearHeat({
+          id: `${loteId}-heat-${i}`, loteId, servicioId: SERVICIO_ID, fecha, horaInicio, horaFin, posicionEnLote: i + 1,
+        });
+        fake.asignaciones.push({
+          id: `${loteId}-alloc-${i}`, reservationId, heatId: heat.id, cantidadParticipantes: 2, estado,
+        });
+      });
+    }
+
+    it("incluye inicio y fin de la reserva, tomados de sus heats activos", async () => {
+      const fake = new FakePrisma();
+      const fecha = new Date("2026-09-10");
+      const reserva = crearReserva(fake, { id: "1", fecha });
+      asignarHeats(fake, reserva.id, fecha, "lote-1", [["09:00", "09:15"], ["09:15", "09:30"]]);
+
+      const [resultado] = await buscarReservas(comoPrisma(fake), SERVICIO_ID, {});
+
+      expect(resultado!.horarios).toEqual([{ horaInicio: "09:00", horaFin: "09:30" }]);
+    });
+
+    it("devuelve un horario por lote cuando la reserva tiene vueltas en horarios separados, en orden", async () => {
+      const fake = new FakePrisma();
+      const fecha = new Date("2026-09-10");
+      const reserva = crearReserva(fake, { id: "1", fecha });
+      asignarHeats(fake, reserva.id, fecha, "lote-tarde", [["14:00", "14:15"]]);
+      asignarHeats(fake, reserva.id, fecha, "lote-manana", [["09:00", "09:15"]]);
+
+      const [resultado] = await buscarReservas(comoPrisma(fake), SERVICIO_ID, {});
+
+      expect(resultado!.horarios).toEqual([
+        { horaInicio: "09:00", horaFin: "09:15" },
+        { horaInicio: "14:00", horaFin: "14:15" },
+      ]);
+    });
+
+    it("una reserva sin asignaciones activas (ej. cancelada) no tiene horarios", async () => {
+      const fake = new FakePrisma();
+      const fecha = new Date("2026-09-10");
+      const reserva = crearReserva(fake, { id: "1", fecha, estado: "CANCELADA" });
+      asignarHeats(fake, reserva.id, fecha, "lote-1", [["09:00", "09:15"]], "LIBERADA");
+
+      const [resultado] = await buscarReservas(comoPrisma(fake), SERVICIO_ID, {});
+
+      expect(resultado!.horarios).toEqual([]);
+    });
+
+    it("ordena por fecha y, dentro del dia, de la manana a la tarde; las sin hora van al final de su dia", async () => {
+      const fake = new FakePrisma();
+      const dia1 = new Date("2026-09-10");
+      const dia2 = new Date("2026-09-11");
+      const tarde = crearReserva(fake, { id: "tarde", fecha: dia1 });
+      const sinHora = crearReserva(fake, { id: "sinhora", fecha: dia1, estado: "CANCELADA" });
+      const manana = crearReserva(fake, { id: "manana", fecha: dia1 });
+      const diaSiguiente = crearReserva(fake, { id: "siguiente", fecha: dia2 });
+      asignarHeats(fake, tarde.id, dia1, "lote-tarde", [["14:00", "14:15"]]);
+      asignarHeats(fake, manana.id, dia1, "lote-manana", [["09:30", "09:45"]]);
+      asignarHeats(fake, diaSiguiente.id, dia2, "lote-siguiente", [["09:00", "09:15"]]);
+
+      const resultado = await buscarReservas(comoPrisma(fake), SERVICIO_ID, {});
+
+      expect(resultado.map((r) => r.codigoPublico)).toEqual([
+        `SRP-${manana.id}`,
+        `SRP-${tarde.id}`,
+        `SRP-${sinHora.id}`,
+        `SRP-${diaSiguiente.id}`,
+      ]);
+    });
   });
 
   it("filtra por texto libre que coincide con codigo, nombre o telefono, sin distinguir mayusculas", async () => {

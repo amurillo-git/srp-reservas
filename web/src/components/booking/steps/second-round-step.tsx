@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { consultarDisponibilidadRepeticiones } from "@/lib/api";
+import { formatoHora12 } from "@/lib/format";
 
 export function SecondRoundStep({
   servicioId,
@@ -87,7 +88,7 @@ export function SecondRoundStep({
                 className="rounded-xl"
                 onClick={() => onSeparado(hora)}
               >
-                {hora}
+                {formatoHora12(hora)}
               </Button>
             ))}
           </div>

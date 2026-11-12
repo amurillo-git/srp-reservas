@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatoFechaLarga } from "@/lib/format";
+import { formatoFechaLarga, formatoHora12 } from "@/lib/format";
 import { listarHorasDisponibles } from "@/lib/api";
 
 export function TimeStep({
@@ -71,7 +71,7 @@ export function TimeStep({
                 className="rounded-xl"
                 onClick={() => onSelect(hora)}
               >
-                {hora}
+                {formatoHora12(hora)}
               </Button>
             ))}
           </div>

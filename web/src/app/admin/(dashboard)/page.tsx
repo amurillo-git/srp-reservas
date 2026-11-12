@@ -21,7 +21,7 @@ import {
   type SinpePendiente,
 } from "@/lib/admin-api";
 import { obtenerSesion } from "@/lib/admin-auth";
-import { formatoFechaLarga, formatoMoneda, hoyISO } from "@/lib/format";
+import { formatoFechaLarga, formatoHora12, formatoMoneda, formatoRangoHora12, hoyISO } from "@/lib/format";
 import type { Servicio } from "@/lib/types";
 
 /** Estado de carga de una seccion del dashboard: cada widget se resuelve de
@@ -162,7 +162,7 @@ function SeccionOcupacion({ estado }: { estado: EstadoSeccion<OcupacionHeat> }) 
         {estado.tipo === "lista" &&
           estado.datos.map((h) => (
             <div key={h.heatId} className="flex items-center justify-between gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm">
-              <span className="font-medium">{h.horaInicio}</span>
+              <span className="font-medium">{formatoHora12(h.horaInicio)}</span>
               <span className="text-muted-foreground">
                 {h.ocupados}/{h.capacidadMaxima} ocupados · {h.disponible} libres
               </span>
@@ -375,7 +375,7 @@ function SeccionBloqueos({ estado }: { estado: EstadoSeccion<BloqueoAdmin> }) {
           estado.datos.map((b) => (
             <div key={b.id} className="flex items-center justify-between gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm">
               <span className="font-medium">
-                {b.horaInicio}–{b.horaFin}
+                {formatoRangoHora12(b.horaInicio, b.horaFin)}
               </span>
               <span className="truncate text-muted-foreground">{b.motivo ?? "Sin motivo"}</span>
             </div>

@@ -1094,10 +1094,10 @@ describe("GET /api/admin/reservations/search (14.5)", () => {
     });
   }
 
-  it("devuelve reservas del servicio sin filtros, mas recientes primero", async () => {
+  it("devuelve reservas del servicio sin filtros, en orden cronologico", async () => {
     const fake = new FakePrisma();
-    crearReservaEnFake(fake, { id: "1", fecha: new Date("2026-09-10"), estado: "CONFIRMADA" });
     crearReservaEnFake(fake, { id: "2", fecha: new Date("2026-09-12"), estado: "CONFIRMADA" });
+    crearReservaEnFake(fake, { id: "1", fecha: new Date("2026-09-10"), estado: "CONFIRMADA" });
     const app = crearApp(comoPrisma(fake));
     const auth = await tokenAdminDePrueba(fake);
 
@@ -1107,7 +1107,8 @@ describe("GET /api/admin/reservations/search (14.5)", () => {
       .set("Authorization", auth);
 
     expect(respuesta.status).toBe(200);
-    expect(respuesta.body.reservas.map((r: { codigoPublico: string }) => r.codigoPublico)).toEqual(["SRP-2", "SRP-1"]);
+    expect(respuesta.body.reservas.map((r: { codigoPublico: string }) => r.codigoPublico)).toEqual(["SRP-1", "SRP-2"]);
+    expect(respuesta.body.reservas[0].horarios).toEqual([]);
   });
 
   it("filtra por texto libre (q) y por estado", async () => {

@@ -180,6 +180,13 @@ export interface FiltrosBusquedaReservas {
   readonly hasta?: FechaISO;
 }
 
+/** Rango horario (HH:mm) de un lote de la reserva: del inicio de su primer
+ * heat al fin de su ultimo heat, sin incluir la limpieza (8.7). */
+export interface HorarioReserva {
+  readonly horaInicio: string;
+  readonly horaFin: string;
+}
+
 export interface ReservaBusqueda extends ReservaResumen {
   readonly estado: string;
   readonly vecesReprogramada: number;
@@ -187,6 +194,10 @@ export interface ReservaBusqueda extends ReservaResumen {
    * segunda consulta. */
   readonly montoSaldo: number;
   readonly moneda: string;
+  /** Un horario por lote (una sola vuelta o vueltas consecutivas = 1; vueltas
+   * en horarios separados = 2), ordenado. Vacio si la reserva ya no tiene
+   * asignaciones activas (cancelada, expirada, rechazada). */
+  readonly horarios: readonly HorarioReserva[];
 }
 
 /** Tope duro de resultados (14.5): esta pantalla es para encontrar UNA
@@ -194,11 +205,64 @@ export interface ReservaBusqueda extends ReservaResumen {
  * filtros muy amplios) simplemente se corta aqui en vez de traer todo. */
 const LIMITE_RESULTADOS_BUSQUEDA = 100;
 
+/** Horarios por reserva, en dos consultas (no una por reserva): solo cuentan
+ * las asignaciones ACTIVA, asi que una reserva cancelada/expirada queda sin
+ * horarios. Los heats se agrupan por lote: cada lote es un horario. */
+async function horariosDeReservas(
+  prisma: PrismaClient,
+  reservationIds: readonly string[],
+): Promise<Map<string, HorarioReserva[]>> {
+  const resultado = new Map<string, HorarioReserva[]>();
+  if (reservationIds.length === 0) return resultado;
+
+  const asignaciones = await prisma.heatAllocation.findMany({
+    where: { reservationId: { in: [...reservationIds] }, estado: "ACTIVA" },
+  });
+  if (asignaciones.length === 0) return resultado;
+
+  const heatIds = [...new Set(asignaciones.map((a) => a.heatId))];
+  const heats = await prisma.heat.findMany({ where: { id: { in: heatIds } } });
+  const heatPorId = new Map(heats.map((heat) => [heat.id, heat]));
+
+  const lotesPorReserva = new Map<string, Map<string, HorarioReserva>>();
+  for (const asignacion of asignaciones) {
+    const heat = heatPorId.get(asignacion.heatId);
+    if (!heat) continue;
+    const lotes = lotesPorReserva.get(asignacion.reservationId) ?? new Map<string, HorarioReserva>();
+    const actual = lotes.get(heat.loteId);
+    lotes.set(heat.loteId, {
+      horaInicio: actual && actual.horaInicio < heat.horaInicio ? actual.horaInicio : heat.horaInicio,
+      horaFin: actual && actual.horaFin > heat.horaFin ? actual.horaFin : heat.horaFin,
+    });
+    lotesPorReserva.set(asignacion.reservationId, lotes);
+  }
+
+  for (const [reservationId, lotes] of lotesPorReserva) {
+    resultado.set(
+      reservationId,
+      [...lotes.values()].sort((a, b) => a.horaInicio.localeCompare(b.horaInicio)),
+    );
+  }
+  return resultado;
+}
+
+/** Las reservas sin horario (canceladas, expiradas...) van al final de su dia. */
+const HORA_SIN_ASIGNAR = "99:99";
+
+function compararCronologicamente(a: ReservaBusqueda, b: ReservaBusqueda): number {
+  return (
+    a.fecha.localeCompare(b.fecha) ||
+    (a.horarios[0]?.horaInicio ?? HORA_SIN_ASIGNAR).localeCompare(b.horarios[0]?.horaInicio ?? HORA_SIN_ASIGNAR) ||
+    a.codigoPublico.localeCompare(b.codigoPublico)
+  );
+}
+
 /** Busqueda de reservas para el panel administrativo (14.5): combina texto
  * libre (codigo/nombre/telefono), estado y rango de fecha, todos opcionales.
- * Sin ningun filtro, devuelve las mas recientes del servicio (topadas por
+ * Sin ningun filtro, toma las mas recientes del servicio (topadas por
  * LIMITE_RESULTADOS_BUSQUEDA) para que la pantalla nunca quede vacia sin
- * explicacion. */
+ * explicacion, y las devuelve en orden cronologico: fecha ascendente y, dentro
+ * de cada dia, de la manana a la tarde. */
 export async function buscarReservas(
   prisma: PrismaClient,
   servicioId: string,
@@ -228,13 +292,21 @@ export async function buscarReservas(
     take: LIMITE_RESULTADOS_BUSQUEDA,
   });
 
-  return reservas.map((reserva) => ({
-    ...comoResumen(reserva),
-    estado: reserva.estado,
-    vecesReprogramada: reserva.vecesReprogramada ?? 0,
-    montoSaldo: Number(reserva.montoSaldo),
-    moneda: reserva.moneda,
-  }));
+  const horarios = await horariosDeReservas(
+    prisma,
+    reservas.map((reserva) => reserva.id),
+  );
+
+  return reservas
+    .map((reserva) => ({
+      ...comoResumen(reserva),
+      estado: reserva.estado,
+      vecesReprogramada: reserva.vecesReprogramada ?? 0,
+      montoSaldo: Number(reserva.montoSaldo),
+      moneda: reserva.moneda,
+      horarios: horarios.get(reserva.id) ?? [],
+    }))
+    .sort(compararCronologicamente);
 }
 
 function comoResumen(reserva: {

@@ -280,6 +280,9 @@ export interface ReservaBusqueda {
   readonly vecesReprogramada: number;
   readonly montoSaldo: number;
   readonly moneda: string;
+  /** Un horario por lote ("HH:mm", 24 h), ordenado; vacio si la reserva ya no
+   * tiene asignaciones activas (cancelada, expirada, rechazada). */
+  readonly horarios: readonly { readonly horaInicio: string; readonly horaFin: string }[];
 }
 
 export interface FiltrosBusquedaReservas {

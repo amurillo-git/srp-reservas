@@ -9,7 +9,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { consultarReserva, obtenerConfiguracionPago, type ModoSinpe } from "@/lib/api";
-import { formatoMoneda } from "@/lib/format";
+import { formatoHora12, formatoMoneda, reservaEnHoraActual } from "@/lib/format";
+import { TimeInput12h } from "./time-input-12h";
 import {
   ajustarAsistentesAdmin,
   buscarReservasAdmin,
@@ -77,9 +78,16 @@ export function ReservationsSearch({ token, serviceId }: { token: string; servic
   const [procesando, setProcesando] = useState<string | null>(null);
   const [cobrando, setCobrando] = useState<string | null>(null);
   const [modoSinpe, setModoSinpe] = useState<ModoSinpe>("MANUAL");
+  // Se refresca cada minuto para que el resaltado de "hora actual" avance solo.
+  const [ahora, setAhora] = useState(() => new Date());
 
   useEffect(() => {
     obtenerConfiguracionPago().then(({ modoSinpe }) => setModoSinpe(modoSinpe));
+  }, []);
+
+  useEffect(() => {
+    const id = setInterval(() => setAhora(new Date()), 60_000);
+    return () => clearInterval(id);
   }, []);
 
   async function buscar() {
@@ -105,7 +113,7 @@ export function ReservationsSearch({ token, serviceId }: { token: string; servic
     }
     toast.success("Reserva cancelada.");
     setResultados((actual) =>
-      actual?.map((r) => (r.codigoPublico === codigoPublico ? { ...r, estado: "CANCELADA" } : r)) ?? null,
+      actual?.map((r) => (r.codigoPublico === codigoPublico ? { ...r, estado: "CANCELADA", horarios: [] } : r)) ?? null,
     );
   }
 
@@ -138,13 +146,9 @@ export function ReservationsSearch({ token, serviceId }: { token: string; servic
     }
     toast.success("Reserva reprogramada.");
     setReprogramando(null);
-    setResultados((actual) =>
-      actual?.map((r) =>
-        r.codigoPublico === codigoPublico
-          ? { ...r, fecha: formulario.date, cantidadPersonas: formulario.partySize, vecesReprogramada: r.vecesReprogramada + 1 }
-          : r,
-      ) ?? null,
-    );
+    // Se vuelve a consultar: la hora nueva y su lugar en el orden cronologico
+    // solo los conoce el servidor.
+    await buscar();
   }
 
   return (
@@ -212,10 +216,23 @@ export function ReservationsSearch({ token, serviceId }: { token: string; servic
             <p className="text-sm text-muted-foreground">Ninguna reserva coincide con esa búsqueda.</p>
           )}
           {resultados?.map((r) => (
-            <div key={r.codigoPublico} className="flex flex-col gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm">
+            <div
+              key={r.codigoPublico}
+              className={`flex flex-col gap-2 rounded-lg px-3 py-2 text-sm ${
+                reservaEnHoraActual(r, ahora) ? "bg-primary/15 ring-2 ring-primary" : "bg-muted/50"
+              }`}
+            >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="min-w-0">
-                  <p className="font-medium">{r.clienteNombre}</p>
+                  <p className="flex flex-wrap items-center gap-2 font-medium">
+                    {r.clienteNombre}
+                    {r.horarios.length > 0 && (
+                      <span className="rounded-md bg-primary/10 px-1.5 py-0.5 text-xs font-semibold text-primary">
+                        {r.horarios.map((h) => formatoHora12(h.horaInicio)).join(" + ")}
+                      </span>
+                    )}
+                    {reservaEnHoraActual(r, ahora) && <Badge>Ahora</Badge>}
+                  </p>
                   <p className="text-xs text-muted-foreground">
                     {r.codigoPublico} · {r.clienteTelefono} · {r.fecha} · {r.cantidadPersonas} personas
                     {r.vecesReprogramada > 0 ? ` · reprogramada ${r.vecesReprogramada}x` : ""}
@@ -282,11 +299,10 @@ export function ReservationsSearch({ token, serviceId }: { token: string; servic
                     </div>
                     <div className="flex flex-col gap-1">
                       <Label htmlFor={`reprogramar-hora-${r.codigoPublico}`}>Nueva hora</Label>
-                      <Input
+                      <TimeInput12h
                         id={`reprogramar-hora-${r.codigoPublico}`}
-                        type="time"
                         value={formulario.startTime}
-                        onChange={(e) => setFormulario({ ...formulario, startTime: e.target.value })}
+                        onChange={(startTime) => setFormulario({ ...formulario, startTime })}
                       />
                     </div>
                     <div className="flex flex-col gap-1">

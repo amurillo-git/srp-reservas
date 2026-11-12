@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { formatoFechaLarga, formatoMoneda } from "@/lib/format";
+import { formatoFechaLarga, formatoMoneda, formatoRangoHora12 } from "@/lib/format";
 import { consultarReserva, obtenerConfiguracionPago, type ModoSinpe } from "@/lib/api";
 import type { ReservaPublica } from "@/lib/types";
 import { PaymentStep } from "./steps/payment-step";
@@ -130,7 +130,7 @@ export function ReservationLookup() {
                     <div key={i} className="flex flex-wrap gap-2">
                       {lote.heats.map((heat, j) => (
                         <span key={j} className="rounded-lg bg-background px-2 py-1">
-                          {heat.horaInicio}–{heat.horaFin} · {heat.personas}p
+                          {formatoRangoHora12(heat.horaInicio, heat.horaFin)} · {heat.personas}p
                         </span>
                       ))}
                     </div>

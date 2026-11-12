@@ -14,7 +14,8 @@ import {
   type BloqueoAdmin,
   type ReservaEnConflicto,
 } from "@/lib/admin-api";
-import { hoyISO } from "@/lib/format";
+import { formatoRangoHora12, hoyISO } from "@/lib/format";
+import { TimeInput12h } from "./time-input-12h";
 
 interface FormularioBloqueo {
   horaInicio: string;
@@ -95,7 +96,7 @@ export function AdministrativeBlocks({ token, serviceId }: { token: string; serv
             <div key={b.id} className="flex items-center justify-between gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm">
               <div className="min-w-0">
                 <p className="font-medium">
-                  {b.horaInicio}–{b.horaFin}
+                  {formatoRangoHora12(b.horaInicio, b.horaFin)}
                 </p>
                 <p className="truncate text-xs text-muted-foreground">{b.motivo ?? "Sin motivo"}</p>
               </div>
@@ -111,20 +112,18 @@ export function AdministrativeBlocks({ token, serviceId }: { token: string; serv
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="flex flex-col gap-1">
               <Label htmlFor="bloqueo-inicio">Desde</Label>
-              <Input
+              <TimeInput12h
                 id="bloqueo-inicio"
-                type="time"
                 value={formulario.horaInicio}
-                onChange={(e) => setFormulario({ ...formulario, horaInicio: e.target.value })}
+                onChange={(horaInicio) => setFormulario({ ...formulario, horaInicio })}
               />
             </div>
             <div className="flex flex-col gap-1">
               <Label htmlFor="bloqueo-fin">Hasta</Label>
-              <Input
+              <TimeInput12h
                 id="bloqueo-fin"
-                type="time"
                 value={formulario.horaFin}
-                onChange={(e) => setFormulario({ ...formulario, horaFin: e.target.value })}
+                onChange={(horaFin) => setFormulario({ ...formulario, horaFin })}
               />
             </div>
             <div className="flex flex-col gap-1 sm:col-span-2">

@@ -154,7 +154,7 @@ export interface FilaReserva {
  * valido (sin relaciones ni orden explicito) tanto en Prisma real como
  * aqui. */
 interface ArgsHeatFindMany {
-  where: { servicioId?: Id; fecha?: Date | { gte?: Date; lte?: Date }; loteId?: Id };
+  where: { id?: { in: readonly Id[] }; servicioId?: Id; fecha?: Date | { gte?: Date; lte?: Date }; loteId?: Id };
   orderBy?: { horaInicio?: "asc" | "desc"; posicionEnLote?: "asc" | "desc" };
   include?: {
     lote?: boolean;
@@ -485,6 +485,7 @@ export class FakePrisma {
     findMany: async (args: ArgsHeatFindMany) => {
       const { where, orderBy, include } = args;
       let filas = this.heats.filter((h) => {
+        if (where.id !== undefined && !where.id.in.includes(h.id)) return false;
         if (where.servicioId !== undefined && h.servicioId !== where.servicioId) return false;
         if (where.loteId !== undefined && h.loteId !== where.loteId) return false;
         if (where.fecha !== undefined) {
@@ -586,14 +587,20 @@ export class FakePrisma {
   };
 
   readonly heatAllocation = {
+    /** `reservationId` acepta un id puntual o `{ in: [...] }` (busqueda por
+     * lote de reservas, uso de reportes.service.ts#buscarReservas). */
     findMany: async ({
       where,
     }: {
-      where: { reservationId: Id; estado?: EstadoAsignacion };
+      where: { reservationId: Id | { in: readonly Id[] }; estado?: EstadoAsignacion };
     }) =>
-      this.asignaciones.filter(
-        (a) => a.reservationId === where.reservationId && (where.estado === undefined || a.estado === where.estado),
-      ),
+      this.asignaciones.filter((a) => {
+        const coincideReserva =
+          typeof where.reservationId === "string"
+            ? a.reservationId === where.reservationId
+            : where.reservationId.in.includes(a.reservationId);
+        return coincideReserva && (where.estado === undefined || a.estado === where.estado);
+      }),
     updateMany: async ({
       where,
       data,

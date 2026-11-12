@@ -5,9 +5,10 @@ import { CalendarClock } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { establecerPlantillaSemanal, obtenerPlantillaSemanal, type PlantillaSemanal } from "@/lib/admin-api";
+import { formatoRangoHora12 } from "@/lib/format";
+import { TimeInput12h } from "./time-input-12h";
 
 const DIAS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 
@@ -88,7 +89,7 @@ export function WeeklySchedule({ token, serviceId }: { token: string; serviceId:
                     <div className="flex items-center gap-2">
                       <span className="text-muted-foreground">
                         {plantilla && plantilla.activo
-                          ? `${plantilla.horaApertura}–${plantilla.horaCierre}${plantilla.almuerzoInicio ? ` (almuerzo ${plantilla.almuerzoInicio}–${plantilla.almuerzoFin})` : ""}`
+                          ? `${formatoRangoHora12(plantilla.horaApertura, plantilla.horaCierre)}${plantilla.almuerzoInicio && plantilla.almuerzoFin ? ` (almuerzo ${formatoRangoHora12(plantilla.almuerzoInicio, plantilla.almuerzoFin)})` : ""}`
                           : "Cerrado"}
                       </span>
                       <Button variant="outline" size="xs" onClick={() => abrirEdicion(dia)}>
@@ -99,41 +100,37 @@ export function WeeklySchedule({ token, serviceId }: { token: string; serviceId:
                 </div>
                 {editando && formulario && (
                   <div className="mt-3 flex flex-col gap-3">
-                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div className="flex flex-col gap-1">
                         <Label htmlFor={`apertura-${dia}`}>Apertura</Label>
-                        <Input
+                        <TimeInput12h
                           id={`apertura-${dia}`}
-                          type="time"
                           value={formulario.horaApertura}
-                          onChange={(e) => setFormulario({ ...formulario, horaApertura: e.target.value })}
+                          onChange={(horaApertura) => setFormulario({ ...formulario, horaApertura })}
                         />
                       </div>
                       <div className="flex flex-col gap-1">
                         <Label htmlFor={`cierre-${dia}`}>Cierre</Label>
-                        <Input
+                        <TimeInput12h
                           id={`cierre-${dia}`}
-                          type="time"
                           value={formulario.horaCierre}
-                          onChange={(e) => setFormulario({ ...formulario, horaCierre: e.target.value })}
+                          onChange={(horaCierre) => setFormulario({ ...formulario, horaCierre })}
                         />
                       </div>
                       <div className="flex flex-col gap-1">
                         <Label htmlFor={`almuerzo-inicio-${dia}`}>Almuerzo desde</Label>
-                        <Input
+                        <TimeInput12h
                           id={`almuerzo-inicio-${dia}`}
-                          type="time"
                           value={formulario.almuerzoInicio}
-                          onChange={(e) => setFormulario({ ...formulario, almuerzoInicio: e.target.value })}
+                          onChange={(almuerzoInicio) => setFormulario({ ...formulario, almuerzoInicio })}
                         />
                       </div>
                       <div className="flex flex-col gap-1">
                         <Label htmlFor={`almuerzo-fin-${dia}`}>Almuerzo hasta</Label>
-                        <Input
+                        <TimeInput12h
                           id={`almuerzo-fin-${dia}`}
-                          type="time"
                           value={formulario.almuerzoFin}
-                          onChange={(e) => setFormulario({ ...formulario, almuerzoFin: e.target.value })}
+                          onChange={(almuerzoFin) => setFormulario({ ...formulario, almuerzoFin })}
                         />
                       </div>
                     </div>

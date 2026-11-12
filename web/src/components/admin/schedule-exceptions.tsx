@@ -9,6 +9,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { crearExcepcion, eliminarExcepcion, obtenerExcepciones, type ExcepcionAdmin } from "@/lib/admin-api";
+import { formatoRangoHora12 } from "@/lib/format";
+import { TimeInput12h } from "./time-input-12h";
 
 const MESES = [
   "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -119,7 +121,7 @@ export function ScheduleExceptions({ token, serviceId }: { token: string; servic
                   <Badge variant={e.tipo === "CERRADO" ? "destructive" : "outline"}>{e.tipo}</Badge>
                 </div>
                 <p className="truncate text-xs text-muted-foreground">
-                  {e.horaApertura ? `${e.horaApertura}–${e.horaCierre}` : ""} {e.motivo ?? ""}
+                  {e.horaApertura && e.horaCierre ? formatoRangoHora12(e.horaApertura, e.horaCierre) : ""} {e.motivo ?? ""}
                 </p>
               </div>
               <Button variant="ghost" size="icon-sm" onClick={() => eliminar(e.id)}>
@@ -160,20 +162,18 @@ export function ScheduleExceptions({ token, serviceId }: { token: string; servic
               <>
                 <div className="flex flex-col gap-1">
                   <Label htmlFor="excepcion-apertura">Apertura</Label>
-                  <Input
+                  <TimeInput12h
                     id="excepcion-apertura"
-                    type="time"
                     value={formulario.horaApertura}
-                    onChange={(e) => setFormulario({ ...formulario, horaApertura: e.target.value })}
+                    onChange={(horaApertura) => setFormulario({ ...formulario, horaApertura })}
                   />
                 </div>
                 <div className="flex flex-col gap-1">
                   <Label htmlFor="excepcion-cierre">Cierre</Label>
-                  <Input
+                  <TimeInput12h
                     id="excepcion-cierre"
-                    type="time"
                     value={formulario.horaCierre}
-                    onChange={(e) => setFormulario({ ...formulario, horaCierre: e.target.value })}
+                    onChange={(horaCierre) => setFormulario({ ...formulario, horaCierre })}
                   />
                 </div>
               </>

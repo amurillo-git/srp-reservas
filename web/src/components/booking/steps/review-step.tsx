@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatoFechaLarga, formatoMoneda } from "@/lib/format";
+import { formatoFechaLarga, formatoHora12, formatoMoneda } from "@/lib/format";
 import { consultarCotizacion, crearReserva } from "@/lib/api";
 import type { EstadoWizard } from "../types";
 import type { PlanDisponibilidad } from "@/lib/types";
@@ -132,14 +132,16 @@ export function ReviewStep({
           {repeticiones === 2 ? (
             <>
               <dt className="text-muted-foreground">1ª vuelta</dt>
-              <dd className="text-right font-medium">{horaInicio}</dd>
+              <dd className="text-right font-medium">{formatoHora12(horaInicio)}</dd>
               <dt className="text-muted-foreground">2ª vuelta</dt>
-              <dd className="text-right font-medium">{horaInicioVuelta2 ?? "Justo después de la 1ª"}</dd>
+              <dd className="text-right font-medium">
+                {horaInicioVuelta2 ? formatoHora12(horaInicioVuelta2) : "Justo después de la 1ª"}
+              </dd>
             </>
           ) : (
             <>
               <dt className="text-muted-foreground">Hora</dt>
-              <dd className="text-right font-medium">{horaInicio}</dd>
+              <dd className="text-right font-medium">{formatoHora12(horaInicio)}</dd>
             </>
           )}
           <dt className="text-muted-foreground">Personas</dt>
