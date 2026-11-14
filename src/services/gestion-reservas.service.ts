@@ -14,6 +14,7 @@
 
 import { PrismaClient } from "@prisma/client";
 import {
+  calcularYBloquearPlanContinuoFinal,
   calcularYBloquearPlanFinal,
   ConflictoBloqueoInestable,
   esViolacionUnica,
@@ -143,7 +144,15 @@ export async function reprogramarReserva(
             horaInicioCandidata: nuevaSolicitud.horaInicioCandidata,
             cantidadPersonas: nuevaSolicitud.cantidadPersonas,
           };
-          const resultado = await calcularYBloquearPlanFinal(tx, solicitudPlan, reserva.id);
+          // Una reserva de 2 heats (repeticiones) se rearma con sus vueltas
+          // seguidas; si no caben seguidas en el nuevo horario, no hay
+          // disponibilidad (no se parte en horarios separados sin que el
+          // administrador lo elija). Antes se rearmaba como 1 solo heat y
+          // se cobraba el precio de uno.
+          const resultado =
+            reserva.repeticiones > 1
+              ? await calcularYBloquearPlanContinuoFinal(tx, solicitudPlan, reserva.repeticiones, reserva.id)
+              : await calcularYBloquearPlanFinal(tx, solicitudPlan, reserva.id);
           if (!resultado.disponible) {
             return { ok: false, motivo: "NO_DISPONIBLE" };
           }

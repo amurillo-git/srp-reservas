@@ -580,6 +580,74 @@ export async function ajustarAsistentesAdmin(
   return { ok: false, motivo: cuerpo.motivo ?? cuerpo.error ?? "No se pudo ajustar la cantidad de personas" };
 }
 
+// ----------------------------------------------------------------------------
+// Subir la cantidad de personas de una reserva por encima del limite de 5 por
+// heat (excepcion operativa del administrador).
+// ----------------------------------------------------------------------------
+
+export interface HeatResumen {
+  readonly horaInicio: string;
+  readonly horaFin: string;
+  readonly personas: number;
+}
+
+export type OpcionRepartir =
+  | { readonly disponible: true; readonly heats: readonly HeatResumen[] }
+  | { readonly disponible: false; readonly motivo: "CHOCA_CON_OTRAS_RESERVAS" | "ESTRUCTURA_NO_SOPORTADA" };
+
+export interface OpcionesCambioPersonas {
+  /** true si, en los mismos heats, alguno pasaria de la capacidad normal (5). */
+  readonly requiereDecision: boolean;
+  readonly mismoSlot: readonly HeatResumen[];
+  /** null si no hace falta decidir. */
+  readonly repartir: OpcionRepartir | null;
+  readonly moneda: string;
+  readonly montoTotal: number;
+  readonly montoSaldo: number;
+}
+
+export type ModoCambioPersonas = "SAME_SLOT" | "SPLIT";
+
+export type ResultadoOpcionesCambioPersonas =
+  | { readonly ok: true; readonly opciones: OpcionesCambioPersonas }
+  | { readonly ok: false; readonly motivo: string };
+
+export async function consultarOpcionesCambioPersonasAdmin(
+  token: string,
+  codigoPublico: string,
+  partySize: number,
+): Promise<ResultadoOpcionesCambioPersonas> {
+  try {
+    const opciones = await obtenerJsonAdmin<OpcionesCambioPersonas>(
+      `/admin/reservations/${codigoPublico}/people-options?partySize=${partySize}`,
+      token,
+    );
+    return { ok: true, opciones };
+  } catch (error) {
+    return { ok: false, motivo: error instanceof ApiError ? error.message : "No se pudieron consultar las opciones" };
+  }
+}
+
+export type ResultadoCambioPersonasAdmin =
+  | { readonly ok: true; readonly montoTotal: number; readonly montoSaldo: number }
+  | { readonly ok: false; readonly motivo: string };
+
+export async function cambiarPersonasAdmin(
+  token: string,
+  codigoPublico: string,
+  partySize: number,
+  mode?: ModoCambioPersonas,
+): Promise<ResultadoCambioPersonasAdmin> {
+  const { status, datos } = await enviarJsonAdmin<{ error?: string; montoTotal?: number; montoSaldo?: number }>(
+    "PUT",
+    `/admin/reservations/${codigoPublico}/people`,
+    token,
+    { partySize, ...(mode ? { mode } : {}) },
+  );
+  if (status === 200) return { ok: true, montoTotal: datos.montoTotal ?? 0, montoSaldo: datos.montoSaldo ?? 0 };
+  return { ok: false, motivo: datos.error ?? "No se pudo cambiar la cantidad de personas" };
+}
+
 export async function marcarSaldoManualAdmin(token: string, codigoPublico: string): Promise<ResultadoAccionSimple> {
   const { status, datos: cuerpo } = await enviarJsonAdmin<{ motivo?: string; error?: string }>(
     "POST",

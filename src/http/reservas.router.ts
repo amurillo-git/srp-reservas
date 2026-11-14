@@ -29,6 +29,11 @@ import {
 import { crearIntencionSaldoOnvo, crearIntencionSinpeOnvo } from "../services/pago-sinpe-onvo.service.js";
 import { establecerModoSinpe, obtenerModoSinpe } from "../services/configuracion-pago.service.js";
 import { ajustarAsistentesReales, marcarSaldoPagadoManual } from "../services/cobro-saldo.service.js";
+import {
+  aplicarCambioPersonas,
+  consultarOpcionesCambioPersonas,
+  type ModoCambioPersonas,
+} from "../services/cambio-personas.service.js";
 import { iniciarSesion } from "../services/auth.service.js";
 import { requireAuth, type RequestAutenticado } from "./auth.middleware.js";
 import { listarEventos, registrarEvento, type ActorAuditoria } from "../services/auditoria.service.js";
@@ -67,6 +72,10 @@ const ROLES_VALIDAN_SINPE = ["ADMINISTRADOR", "CAJA"] as const;
 const ROLES_GESTIONAN_BLOQUEOS = ["ADMINISTRADOR"] as const;
 /** 14.7: Administrador y Atencion "crean y modifican reservas". */
 const ROLES_GESTIONAN_RESERVAS = ["ADMINISTRADOR", "ATENCION"] as const;
+/** Subir la cantidad de personas de una reserva (por encima de 5 por heat): lo
+ * hacen quienes modifican reservas (Atencion) y quienes cobran el saldo al
+ * llegar (Caja), mas el Administrador. */
+const ROLES_CAMBIAN_PERSONAS = ["ADMINISTRADOR", "ATENCION", "CAJA"] as const;
 /** 14.7: solo Administrador gestiona horarios. */
 const ROLES_GESTIONAN_HORARIOS = ["ADMINISTRADOR"] as const;
 /** 14.7: mismos roles que validan SINPE (administracion + manejo de dinero). */
@@ -596,6 +605,56 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
         return;
       }
       const status = resultado.motivo === "NO_ENCONTRADA" ? 404 : 409;
+      enviarError(res, status, resultado.motivo);
+    }),
+  );
+
+  // Subir la cantidad de personas de una reserva por encima del limite de 5
+  // por heat (excepcion operativa). Primero se consultan las opciones (solo
+  // lectura) y luego se aplica la que elija el administrador.
+  router.get(
+    "/admin/reservations/:publicCode/people-options",
+    requireAuth(ROLES_CAMBIAN_PERSONAS),
+    conManejoDeErrores(async (req, res) => {
+      const partySize = comoEnteroPositivo(req.query.partySize);
+      if (partySize === null) {
+        return enviarError(res, 400, "partySize debe ser un entero positivo");
+      }
+
+      const resultado = await consultarOpcionesCambioPersonas(prisma, req.params.publicCode!, partySize);
+      if (resultado.ok) {
+        res.status(200).json(resultado);
+        return;
+      }
+      const status = resultado.motivo === "NO_ENCONTRADA" ? 404 : resultado.motivo === "CANTIDAD_INVALIDA" ? 400 : 409;
+      enviarError(res, status, resultado.motivo);
+    }),
+  );
+
+  router.put(
+    "/admin/reservations/:publicCode/people",
+    requireAuth(ROLES_CAMBIAN_PERSONAS),
+    conManejoDeErrores(async (req, res) => {
+      const { partySize, mode } = req.body ?? {};
+      if (typeof partySize !== "number" || !Number.isInteger(partySize) || partySize <= 0) {
+        return enviarError(res, 400, "partySize debe ser un entero positivo");
+      }
+      if (mode !== undefined && mode !== "SAME_SLOT" && mode !== "SPLIT") {
+        return enviarError(res, 400, "mode debe ser SAME_SLOT o SPLIT");
+      }
+      const modo: ModoCambioPersonas | undefined =
+        mode === "SAME_SLOT" ? "MISMO_SLOT" : mode === "SPLIT" ? "REPARTIR" : undefined;
+
+      const resultado = await aplicarCambioPersonas(prisma, req.params.publicCode!, partySize, modo);
+      if (resultado.ok) {
+        await registrarEvento(prisma, actorDesde(req), {
+          accion: "PERSONAS_AJUSTADAS", objetoTipo: "RESERVA", objetoId: req.params.publicCode!,
+          valoresNuevos: { cantidadPersonas: partySize, modo: resultado.modo },
+        });
+        res.status(200).json({ modo: resultado.modo, montoTotal: resultado.montoTotal, montoSaldo: resultado.montoSaldo });
+        return;
+      }
+      const status = resultado.motivo === "NO_ENCONTRADA" ? 404 : resultado.motivo === "CANTIDAD_INVALIDA" ? 400 : 409;
       enviarError(res, status, resultado.motivo);
     }),
   );

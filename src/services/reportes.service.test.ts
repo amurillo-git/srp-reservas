@@ -93,6 +93,24 @@ describe("participantesPorDia", () => {
   });
 });
 
+describe("ocupacionHeatsDelDia con un heat sobrepasado por el administrador", () => {
+  it("un heat con mas de 5 personas muestra ocupados reales y disponible 0 (nunca negativo)", async () => {
+    const fake = new FakePrisma();
+    const lote = fake.crearLote({
+      id: "lote-1", servicioId: SERVICIO_ID, fecha: new Date("2026-09-10"),
+      horaInicio: "09:00", horaFinUltimoHeat: "09:15", horaInicioLimpieza: "09:15", horaFinLimpieza: "09:30", cantidadHeats: 1,
+    });
+    fake.crearHeat({ id: "heat-1", loteId: lote.id, servicioId: SERVICIO_ID, fecha: new Date("2026-09-10"), horaInicio: "09:00", horaFin: "09:15", posicionEnLote: 1 });
+    fake.crearReservaConAsignacion({ heatId: "heat-1", servicioId: SERVICIO_ID, fecha: new Date("2026-09-10"), cantidadParticipantes: 8, estado: "CONFIRMADA" });
+
+    const resultado = await ocupacionHeatsDelDia(comoPrisma(fake), SERVICIO_ID, "2026-09-10");
+
+    expect(resultado).toEqual([
+      { heatId: "heat-1", horaInicio: "09:00", capacidadMaxima: 5, ocupados: 8, disponible: 0 },
+    ]);
+  });
+});
+
 describe("ocupacionHeatsDelDia", () => {
   it("devuelve ocupados/disponible por heat, ordenado por hora de inicio", async () => {
     const fake = new FakePrisma();

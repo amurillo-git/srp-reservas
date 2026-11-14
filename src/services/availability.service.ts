@@ -320,7 +320,7 @@ async function construirContextoDisponibilidad(
   };
 }
 
-async function construirPlanDesde(
+export async function construirPlanDesde(
   cliente: ClientePrisma,
   solicitud: SolicitudConsultarDisponibilidad,
   reservationIdAIgnorar?: string,
@@ -354,7 +354,7 @@ export async function consultarDisponibilidad(
   return aResultadoPublico(await construirPlanDesde(prisma, solicitud));
 }
 
-async function construirPlanRepetidoDesde(
+export async function construirPlanRepetidoDesde(
   cliente: ClientePrisma,
   solicitud: SolicitudConsultarDisponibilidad,
   repeticiones: number,
@@ -747,15 +747,18 @@ export async function calcularYBloquearPlanFinal(
  * como no disponible para este camino (el llamador decide si intentar la
  * ruta de horarios separados).
  */
-async function calcularYBloquearPlanContinuoFinal(
+export async function calcularYBloquearPlanContinuoFinal(
   tx: Prisma.TransactionClient,
   solicitud: SolicitudConsultarDisponibilidad,
   repeticiones: number,
+  /** Igual que en `calcularYBloquearPlanFinal`: al rearmar una reserva
+   * existente, sus propias asignaciones activas no cuentan como ocupacion. */
+  reservationIdAIgnorar?: string,
 ): Promise<ResultadoCalculoPlan> {
   const heatIdsBloqueados = new Set<string>();
   const loteIdsBloqueados = new Set<string>();
 
-  let planCandidato = await construirPlanRepetidoDesde(tx, solicitud, repeticiones);
+  let planCandidato = await construirPlanRepetidoDesde(tx, solicitud, repeticiones, reservationIdAIgnorar);
 
   for (let ronda = 0; ronda < MAX_RONDAS_ESTABILIZACION; ronda++) {
     if (planCandidato.tipo !== "continuo") {
@@ -776,7 +779,7 @@ async function calcularYBloquearPlanContinuoFinal(
     heatIdsNuevos.forEach((id) => heatIdsBloqueados.add(id));
     loteIdsNuevos.forEach((id) => loteIdsBloqueados.add(id));
 
-    planCandidato = await construirPlanRepetidoDesde(tx, solicitud, repeticiones);
+    planCandidato = await construirPlanRepetidoDesde(tx, solicitud, repeticiones, reservationIdAIgnorar);
   }
 
   throw new ConflictoBloqueoInestable();

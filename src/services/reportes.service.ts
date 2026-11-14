@@ -123,7 +123,9 @@ export async function ocupacionHeatsDelDia(
       horaInicio: heat.horaInicio,
       capacidadMaxima: CAPACIDAD_MAXIMA_POR_HEAT,
       ocupados,
-      disponible: CAPACIDAD_MAXIMA_POR_HEAT - ocupados,
+      // El administrador puede pasar de la capacidad normal (excepcion): ahi
+      // no hay cupo, pero nunca se muestra un disponible negativo.
+      disponible: Math.max(0, CAPACIDAD_MAXIMA_POR_HEAT - ocupados),
     };
   });
 }

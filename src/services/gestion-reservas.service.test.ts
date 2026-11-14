@@ -180,6 +180,67 @@ describe("reprogramarReserva", () => {
     expect(fake.reservas.find((r) => r.id === reserva.id)!.cantidadPersonas).toBe(3);
   });
 
+  describe("reservas de 2 heats (repeticiones)", () => {
+    /** Reserva CONFIRMADA de 5 personas con 2 heats consecutivos (10:00 y
+     * 10:15) en un solo lote, ya cobrada a precio de 2 vueltas (2 x 20000). */
+    function crearReservaDeDosHeats(fake: FakePrisma) {
+      const lote = fake.crearLote({
+        id: "lote-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
+        horaInicio: "10:00", horaFinUltimoHeat: "10:30",
+        horaInicioLimpieza: "10:30", horaFinLimpieza: "10:45", cantidadHeats: 2,
+      });
+      fake.crearHeat({ id: "heat-1", loteId: lote.id, servicioId: SERVICIO_ID, fecha: FECHA_DATE, horaInicio: "10:00", horaFin: "10:15", posicionEnLote: 1 });
+      fake.crearHeat({ id: "heat-2", loteId: lote.id, servicioId: SERVICIO_ID, fecha: FECHA_DATE, horaInicio: "10:15", horaFin: "10:30", posicionEnLote: 2 });
+      const { reserva } = fake.crearReservaConAsignacion({
+        heatId: "heat-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE, cantidadParticipantes: 5, estado: "CONFIRMADA",
+      });
+      fake.asignaciones.push({
+        id: "alloc-extra", reservationId: reserva.id, heatId: "heat-2", cantidadParticipantes: 5, estado: "ACTIVA",
+      });
+      Object.assign(reserva, { repeticiones: 2, montoTotal: 40000, montoDeposito: 20000, montoSaldo: 20000 });
+      return reserva;
+    }
+
+    it("reprograma conservando las 2 vueltas consecutivas y el precio de 2 vueltas", async () => {
+      const fake = new FakePrisma();
+      crearFixtureBase(fake);
+      const reserva = crearReservaDeDosHeats(fake);
+
+      const resultado = await reprogramarReserva(comoPrisma(fake), reserva.codigoPublico, {
+        fecha: FECHA_ISO, horaInicioCandidata: "11:00", cantidadPersonas: 5,
+      });
+
+      expect(resultado.ok).toBe(true);
+      const activas = fake.asignaciones.filter((a) => a.reservationId === reserva.id && a.estado === "ACTIVA");
+      const horas = activas
+        .map((a) => fake.heats.find((h) => h.id === a.heatId)!.horaInicio)
+        .sort();
+      expect(horas).toEqual(["11:00", "11:15"]);
+      const actual = fake.reservas.find((r) => r.id === reserva.id)!;
+      expect(actual.montoTotal).toBe(40000);
+      expect(actual.repeticiones).toBe(2);
+    });
+
+    it("si las 2 vueltas no caben consecutivas en el nuevo horario devuelve NO_DISPONIBLE y no toca la reserva", async () => {
+      const fake = new FakePrisma();
+      crearFixtureBase(fake);
+      const reserva = crearReservaDeDosHeats(fake);
+      // Bloquea el segundo heat que necesitaria (11:15): una sola vuelta si cabria, las dos seguidas no.
+      fake.crearBloqueo({ id: "bloqueo-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE, horaInicio: "11:15", horaFin: "11:30" });
+
+      const resultado = await reprogramarReserva(comoPrisma(fake), reserva.codigoPublico, {
+        fecha: FECHA_ISO, horaInicioCandidata: "11:00", cantidadPersonas: 5,
+      });
+
+      expect(resultado.ok).toBe(false);
+      if (resultado.ok) return;
+      expect(resultado.motivo).toBe("NO_DISPONIBLE");
+      const activas = fake.asignaciones.filter((a) => a.reservationId === reserva.id && a.estado === "ACTIVA");
+      expect(activas).toHaveLength(2);
+      expect(fake.reservas.find((r) => r.id === reserva.id)!.montoTotal).toBe(40000);
+    });
+  });
+
   it("28: si el deposito ya esta pagado (CONFIRMADA), aumentar personas no toca el deposito, solo el saldo", async () => {
     const fake = new FakePrisma();
     crearFixtureBase(fake);

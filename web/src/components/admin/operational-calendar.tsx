@@ -38,16 +38,20 @@ function ocupadosDeHeat(heat: HeatOperativo): number {
   return heat.reservas.reduce((suma, r) => suma + r.cantidadPersonas, 0);
 }
 
-function estadoOcupacion(heat: HeatOperativo): "LIBRE" | "PARCIAL" | "COMPLETO" {
+/** EXCEDIDO: el administrador puso mas personas que la capacidad normal del
+ * heat (excepcion operativa); se marca aparte para que se note en el calendario. */
+function estadoOcupacion(heat: HeatOperativo): "LIBRE" | "PARCIAL" | "COMPLETO" | "EXCEDIDO" {
   const ocupados = ocupadosDeHeat(heat);
   if (ocupados === 0) return "LIBRE";
-  return ocupados >= heat.capacidadMaxima ? "COMPLETO" : "PARCIAL";
+  if (ocupados > heat.capacidadMaxima) return "EXCEDIDO";
+  return ocupados === heat.capacidadMaxima ? "COMPLETO" : "PARCIAL";
 }
 
 const VARIANTE_POR_OCUPACION: Record<string, "outline" | "default" | "destructive"> = {
   LIBRE: "outline",
   PARCIAL: "default",
   COMPLETO: "destructive",
+  EXCEDIDO: "destructive",
 };
 
 interface ResumenDia {
@@ -64,7 +68,7 @@ function resumirDia(cal: CalendarioOperativoDelDia): ResumenDia {
     cerrado: cal.ventanas.length === 0,
     lotes: cal.lotes.length,
     heatsTotal: heats.length,
-    heatsCompletos: heats.filter((h) => estadoOcupacion(h) === "COMPLETO").length,
+    heatsCompletos: heats.filter((h) => ["COMPLETO", "EXCEDIDO"].includes(estadoOcupacion(h))).length,
     participantes: heats.reduce((suma, h) => suma + ocupadosDeHeat(h), 0),
   };
 }

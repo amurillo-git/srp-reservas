@@ -165,6 +165,7 @@ function SeccionOcupacion({ estado }: { estado: EstadoSeccion<OcupacionHeat> }) 
               <span className="font-medium">{formatoHora12(h.horaInicio)}</span>
               <span className="text-muted-foreground">
                 {h.ocupados}/{h.capacidadMaxima} ocupados · {h.disponible} libres
+                {h.ocupados > h.capacidadMaxima ? " · excedido" : ""}
               </span>
             </div>
           ))}

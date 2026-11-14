@@ -891,6 +891,143 @@ describe("cobro de saldo al llegar al parque (POST /admin/reservations/:code/bal
 
     expect(respuesta.status).toBe(400);
   });
+
+  describe("cambio de personas por encima del limite de 5 por heat", () => {
+    it("GET .../people-options: 5 -> 8 pide decision y ofrece mismo slot (8) o repartir (4 + 4)", async () => {
+      const fake = new FakePrisma();
+      crearFixtureBase(fake);
+      const app = crearApp(comoPrisma(fake));
+      const codigoPublico = await crearReservaConfirmada(fake, app);
+      const auth = await tokenAdminDePrueba(fake);
+
+      const respuesta = await request(app)
+        .get(`/api/admin/reservations/${codigoPublico}/people-options`)
+        .query({ partySize: 8 })
+        .set("Authorization", auth);
+
+      expect(respuesta.status).toBe(200);
+      expect(respuesta.body.requiereDecision).toBe(true);
+      expect(respuesta.body.mismoSlot).toEqual([{ horaInicio: "09:00", horaFin: "09:15", personas: 8 }]);
+      expect(respuesta.body.repartir.disponible).toBe(true);
+      expect(respuesta.body.repartir.heats.map((h: { personas: number }) => h.personas)).toEqual([4, 4]);
+      expect(respuesta.body.montoTotal).toBe(32000);
+    });
+
+    it("GET .../people-options valida partySize y reserva inexistente", async () => {
+      const fake = new FakePrisma();
+      crearFixtureBase(fake);
+      const app = crearApp(comoPrisma(fake));
+      const codigoPublico = await crearReservaConfirmada(fake, app);
+      const auth = await tokenAdminDePrueba(fake);
+
+      const sinCantidad = await request(app)
+        .get(`/api/admin/reservations/${codigoPublico}/people-options`)
+        .set("Authorization", auth);
+      const noSube = await request(app)
+        .get(`/api/admin/reservations/${codigoPublico}/people-options`)
+        .query({ partySize: 5 })
+        .set("Authorization", auth);
+      const inexistente = await request(app)
+        .get("/api/admin/reservations/SRP-NO-EXISTE/people-options")
+        .query({ partySize: 8 })
+        .set("Authorization", auth);
+
+      expect(sinCantidad.status).toBe(400);
+      expect(noSube.status).toBe(400);
+      expect(inexistente.status).toBe(404);
+    });
+
+    it("PUT .../people sin elegir modo cuando hace falta decidir devuelve 409 DECISION_REQUERIDA y no cambia nada", async () => {
+      const fake = new FakePrisma();
+      crearFixtureBase(fake);
+      const app = crearApp(comoPrisma(fake));
+      const codigoPublico = await crearReservaConfirmada(fake, app);
+      const auth = await tokenAdminDePrueba(fake);
+
+      const respuesta = await request(app)
+        .put(`/api/admin/reservations/${codigoPublico}/people`)
+        .set("Authorization", auth)
+        .send({ partySize: 8 });
+
+      expect(respuesta.status).toBe(409);
+      expect(respuesta.body.error).toBe("DECISION_REQUERIDA");
+      expect(fake.reservas.find((r) => r.codigoPublico === codigoPublico)!.cantidadPersonas).toBe(5);
+    });
+
+    it("PUT .../people con SAME_SLOT deja los 8 en el mismo heat, actualiza el saldo y registra auditoria", async () => {
+      const fake = new FakePrisma();
+      crearFixtureBase(fake);
+      const app = crearApp(comoPrisma(fake));
+      const codigoPublico = await crearReservaConfirmada(fake, app);
+      const auth = await tokenAdminDePrueba(fake);
+
+      const respuesta = await request(app)
+        .put(`/api/admin/reservations/${codigoPublico}/people`)
+        .set("Authorization", auth)
+        .send({ partySize: 8, mode: "SAME_SLOT" });
+
+      expect(respuesta.status).toBe(200);
+      expect(respuesta.body).toMatchObject({ modo: "MISMO_SLOT", montoTotal: 32000 });
+      const reserva = fake.reservas.find((r) => r.codigoPublico === codigoPublico)!;
+      expect(reserva.cantidadPersonas).toBe(8);
+      expect(fake.asignaciones.filter((a) => a.reservationId === reserva.id && a.estado === "ACTIVA").map((a) => a.cantidadParticipantes)).toEqual([8]);
+      expect(fake.eventosAuditoria.find((e) => e.accion === "PERSONAS_AJUSTADAS")).toBeTruthy();
+    });
+
+    it("PUT .../people con SPLIT reparte en dos heats seguidos", async () => {
+      const fake = new FakePrisma();
+      crearFixtureBase(fake);
+      const app = crearApp(comoPrisma(fake));
+      const codigoPublico = await crearReservaConfirmada(fake, app);
+      const auth = await tokenAdminDePrueba(fake);
+
+      const respuesta = await request(app)
+        .put(`/api/admin/reservations/${codigoPublico}/people`)
+        .set("Authorization", auth)
+        .send({ partySize: 8, mode: "SPLIT" });
+
+      expect(respuesta.status).toBe(200);
+      expect(respuesta.body.modo).toBe("REPARTIR");
+      const reserva = fake.reservas.find((r) => r.codigoPublico === codigoPublico)!;
+      expect(fake.asignaciones.filter((a) => a.reservationId === reserva.id && a.estado === "ACTIVA").map((a) => a.cantidadParticipantes)).toEqual([4, 4]);
+    });
+
+    it("PUT .../people valida el cuerpo: partySize entero y mode SAME_SLOT o SPLIT", async () => {
+      const fake = new FakePrisma();
+      crearFixtureBase(fake);
+      const app = crearApp(comoPrisma(fake));
+      const codigoPublico = await crearReservaConfirmada(fake, app);
+      const auth = await tokenAdminDePrueba(fake);
+      const enviar = (cuerpo: object) =>
+        request(app).put(`/api/admin/reservations/${codigoPublico}/people`).set("Authorization", auth).send(cuerpo);
+
+      expect((await enviar({})).status).toBe(400);
+      expect((await enviar({ partySize: 8.5 })).status).toBe(400);
+      expect((await enviar({ partySize: 8, mode: "OTRO" })).status).toBe(400);
+      expect((await enviar({ partySize: 5, mode: "SAME_SLOT" })).status).toBe(400); // no sube
+    });
+
+    it("exige sesion y un rol que maneje reservas o cobros (Operacion no)", async () => {
+      const fake = new FakePrisma();
+      crearFixtureBase(fake);
+      const app = crearApp(comoPrisma(fake));
+      const codigoPublico = await crearReservaConfirmada(fake, app);
+
+      const sinToken = await request(app).put(`/api/admin/reservations/${codigoPublico}/people`).send({ partySize: 8, mode: "SAME_SLOT" });
+      const operacion = await request(app)
+        .put(`/api/admin/reservations/${codigoPublico}/people`)
+        .set("Authorization", await tokenAdminDePrueba(fake, "OPERACION"))
+        .send({ partySize: 8, mode: "SAME_SLOT" });
+      const caja = await request(app)
+        .put(`/api/admin/reservations/${codigoPublico}/people`)
+        .set("Authorization", await tokenAdminDePrueba(fake, "CAJA"))
+        .send({ partySize: 8, mode: "SAME_SLOT" });
+
+      expect(sinToken.status).toBe(401);
+      expect(operacion.status).toBe(403);
+      expect(caja.status).toBe(200); // Caja cobra el saldo al llegar y puede corregir cuantos llegaron
+    });
+  });
 });
 
 describe("/api/admin/reports (25)", () => {

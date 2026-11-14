@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { consultarReserva, obtenerConfiguracionPago, type ModoSinpe } from "@/lib/api";
 import { formatoFechaHora12, formatoHora12, formatoMoneda, hoyISO, reservaEnHoraActual } from "@/lib/format";
+import { CambioPersonas } from "./cambio-personas";
 import { TimeInput12h } from "./time-input-12h";
 import {
   ajustarAsistentesAdmin,
@@ -77,6 +78,7 @@ export function ReservationsSearch({ token, serviceId }: { token: string; servic
   const [formulario, setFormulario] = useState<FormularioReprogramar>({ date: "", startTime: "", partySize: 1 });
   const [procesando, setProcesando] = useState<string | null>(null);
   const [cobrando, setCobrando] = useState<string | null>(null);
+  const [cambiandoPersonas, setCambiandoPersonas] = useState<string | null>(null);
   const [modoSinpe, setModoSinpe] = useState<ModoSinpe>("MANUAL");
   // Se refresca cada minuto para que el resaltado de "hora actual" avance solo.
   const [ahora, setAhora] = useState(() => new Date());
@@ -266,6 +268,18 @@ export function ReservationsSearch({ token, serviceId }: { token: string; servic
                       Cobrar saldo
                     </Button>
                   )}
+                  {(r.estado === "CONFIRMADA" || r.estado === "PENDIENTE_VALIDACION_SINPE") && (
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      onClick={() =>
+                        setCambiandoPersonas(cambiandoPersonas === r.codigoPublico ? null : r.codigoPublico)
+                      }
+                      disabled={procesando === r.codigoPublico}
+                    >
+                      Cambiar personas
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     size="xs"
@@ -285,6 +299,21 @@ export function ReservationsSearch({ token, serviceId }: { token: string; servic
                 </div>
               </div>
 
+              {cambiandoPersonas === r.codigoPublico && (
+                <div className="border-t pt-3">
+                  <CambioPersonas
+                    token={token}
+                    codigoPublico={r.codigoPublico}
+                    cantidadActual={r.cantidadPersonas}
+                    onAplicado={() => {
+                      setCambiandoPersonas(null);
+                      void buscar();
+                    }}
+                    onCancelar={() => setCambiandoPersonas(null)}
+                  />
+                </div>
+              )}
+
               {cobrando === r.codigoPublico && (
                 <PanelCobroSaldo
                   token={token}
@@ -293,6 +322,7 @@ export function ReservationsSearch({ token, serviceId }: { token: string; servic
                   montoSaldo={r.montoSaldo}
                   moneda={r.moneda}
                   modoSinpe={modoSinpe}
+                  onPersonasCambiadas={() => void buscar()}
                   onPagado={() => {
                     marcarComoPagada(r.codigoPublico);
                     setCobrando(null);
@@ -363,6 +393,7 @@ function PanelCobroSaldo({
   montoSaldo,
   moneda,
   modoSinpe,
+  onPersonasCambiadas,
   onPagado,
   onCerrar,
 }: {
@@ -372,10 +403,13 @@ function PanelCobroSaldo({
   montoSaldo: number;
   moneda: string;
   modoSinpe: ModoSinpe;
+  /** Avisa que la cantidad de personas de la reserva cambio (para refrescar la lista). */
+  onPersonasCambiadas: () => void;
   onPagado: () => void;
   onCerrar: () => void;
 }) {
-  const [paso, setPaso] = useState<"asistentes" | "cobro">("asistentes");
+  const [paso, setPaso] = useState<"asistentes" | "aumentar" | "cobro">("asistentes");
+  const [cantidadAumento, setCantidadAumento] = useState(0);
   const [cantidadReal, setCantidadReal] = useState(String(cantidadPersonas));
   const [saldoActual, setSaldoActual] = useState(montoSaldo);
   const [ajustando, setAjustando] = useState(false);
@@ -401,12 +435,18 @@ function PanelCobroSaldo({
 
   async function confirmarAsistentes() {
     const numero = Number(cantidadReal);
-    if (!Number.isInteger(numero) || numero <= 0 || numero > cantidadPersonas) {
-      toast.error(`Ingresá un número entre 1 y ${cantidadPersonas}.`);
+    if (!Number.isInteger(numero) || numero <= 0) {
+      toast.error("Ingresá un número entero mayor a 0.");
       return;
     }
     if (numero === cantidadPersonas) {
       setPaso("cobro");
+      return;
+    }
+    if (numero > cantidadPersonas) {
+      // Llegaron mas de las reservadas: el administrador decide como acomodarlos.
+      setCantidadAumento(numero);
+      setPaso("aumentar");
       return;
     }
     setAjustando(true);
@@ -470,11 +510,12 @@ function PanelCobroSaldo({
               id={`asistentes-${codigoPublico}`}
               type="number"
               min={1}
-              max={cantidadPersonas}
               value={cantidadReal}
               onChange={(e) => setCantidadReal(e.target.value)}
             />
-            <p className="text-xs text-muted-foreground">Reservado: {cantidadPersonas} personas.</p>
+            <p className="text-xs text-muted-foreground">
+              Reservado: {cantidadPersonas} personas. Si llegaron más, el sistema te pregunta cómo acomodarlos.
+            </p>
           </div>
           <div className="flex gap-2">
             <Button size="sm" onClick={confirmarAsistentes} disabled={ajustando}>
@@ -485,6 +526,21 @@ function PanelCobroSaldo({
             </Button>
           </div>
         </div>
+      )}
+
+      {paso === "aumentar" && (
+        <CambioPersonas
+          token={token}
+          codigoPublico={codigoPublico}
+          cantidadActual={cantidadPersonas}
+          cantidadInicial={cantidadAumento}
+          onAplicado={(resultado) => {
+            setSaldoActual(resultado.montoSaldo);
+            onPersonasCambiadas();
+            setPaso("cobro");
+          }}
+          onCancelar={() => setPaso("asistentes")}
+        />
       )}
 
       {paso === "cobro" && (
