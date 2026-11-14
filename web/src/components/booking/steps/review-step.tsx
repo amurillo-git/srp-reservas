@@ -175,19 +175,7 @@ export function ReviewStep({
           </div>
         ) : null}
 
-        <NormasDeUso />
-
-        <label htmlFor="acepta-normas" className="flex cursor-pointer items-start gap-3 text-sm font-medium">
-          <input
-            id="acepta-normas"
-            type="checkbox"
-            className="mt-0.5 size-5 shrink-0 accent-primary"
-            checked={aceptaNormas}
-            onChange={(e) => setAceptaNormas(e.target.checked)}
-            disabled={enviando}
-          />
-          Acepto las normas de uso del parque
-        </label>
+        <NormasDeUso aceptadas={aceptaNormas} onCambiarAceptadas={setAceptaNormas} deshabilitado={enviando} />
 
         <div className="flex gap-3">
           <Button type="button" variant="ghost" className="rounded-2xl" onClick={onBack} disabled={enviando}>
