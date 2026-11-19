@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import { aplicarCambioPersonas, consultarOpcionesCambioPersonas } from "./cambio-personas.service.js";
+import { agregarLinea, obtenerCuenta } from "./cuenta-reserva.service.js";
 import { FakePrisma, type FilaReserva } from "./testing/fake-prisma.js";
 
 // Cambio de cantidad de personas por el administrador, por encima del limite
@@ -190,6 +191,29 @@ describe("aplicarCambioPersonas", () => {
     expect(actual.montoDeposito).toBe(10000);
     expect(actual.montoSaldo).toBe(22000);
     expect(actual.vecesReprogramada ?? 0).toBe(0); // no es una reprogramacion
+  });
+
+  it("con la cuenta abierta: reajusta la linea reservada y respeta los consumos extra (heat de 10 min, ninos)", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const [heat] = crearLoteConHeats(fake, "lote-1", ["09:00"]);
+    const reserva = crearReserva(fake, [heat!], [5]);
+    const prisma = comoPrisma(fake);
+    await obtenerCuenta(prisma, reserva.codigoPublico);
+    await agregarLinea(prisma, reserva.codigoPublico, { tipo: "HEAT", duracionMin: 10, personas: 2 }); // 2 x 3000 (fake)
+    await agregarLinea(prisma, reserva.codigoPublico, { tipo: "NINO_ACOMPANADO", ninos: 1, heats: 1 }); // 1000
+
+    const r = await aplicarCambioPersonas(prisma, reserva.codigoPublico, 8, "MISMO_SLOT");
+
+    expect(r.ok).toBe(true);
+    const base = fake.consumos.find((c) => c.esBase)!;
+    expect(base).toMatchObject({ cantidad: 8, precioUnitario: 4000, monto: 32000 });
+    expect(fake.consumos).toHaveLength(3);
+    const actual = fake.reservas.find((x) => x.id === reserva.id)!;
+    expect(actual.cantidadPersonas).toBe(8);
+    expect(actual.montoTotal).toBe(32000 + 6000 + 1000);
+    expect(actual.montoSaldo).toBe(32000 + 6000 + 1000 - 10000);
+    if (r.ok) expect(r.montoTotal).toBe(39000);
   });
 
   it("sin elegir modo cuando hace falta decidir: DECISION_REQUERIDA y no cambia nada", async () => {

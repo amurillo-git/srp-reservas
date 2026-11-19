@@ -892,6 +892,167 @@ describe("cobro de saldo al llegar al parque (POST /admin/reservations/:code/bal
     expect(respuesta.status).toBe(400);
   });
 
+  describe("cuenta de la reserva (consumo real y cobros en caja)", () => {
+    const URL_CUENTA = (codigo: string) => `/api/admin/reservations/${codigo}/account`;
+
+    /** Reserva confirmada de 5 personas a 4000 (total 20000, deposito 10000). */
+    async function escenarioCuenta(rol = "ADMINISTRADOR") {
+      const fake = new FakePrisma();
+      crearFixtureBase(fake);
+      const app = crearApp(comoPrisma(fake));
+      const codigoPublico = await crearReservaConfirmada(fake, app);
+      const auth = await tokenAdminDePrueba(fake, rol);
+      return { fake, app, codigoPublico, auth };
+    }
+
+    it("GET .../account abre la cuenta con la linea reservada, las tarifas y el saldo", async () => {
+      const { app, codigoPublico, auth } = await escenarioCuenta();
+
+      const respuesta = await request(app).get(URL_CUENTA(codigoPublico)).set("Authorization", auth);
+
+      expect(respuesta.status).toBe(200);
+      const { cuenta } = respuesta.body;
+      expect(cuenta.lineas).toHaveLength(1);
+      expect(cuenta.lineas[0]).toMatchObject({ tipo: "HEAT", duracionMin: 15, cantidad: 5, monto: 20000, esBase: true });
+      expect(cuenta.totalConsumido).toBe(20000);
+      expect(cuenta.saldo).toBe(10000);
+      expect(cuenta.tarifas).toMatchObject({ ninoAcompanado: 1000, umbralGrupoGrande: 5 });
+    });
+
+    it("POST .../account/lines agrega un heat de 10 min de un subgrupo y registra auditoria", async () => {
+      const { app, fake, codigoPublico, auth } = await escenarioCuenta();
+
+      const respuesta = await request(app)
+        .post(`${URL_CUENTA(codigoPublico)}/lines`)
+        .set("Authorization", auth)
+        .send({ type: "HEAT", durationMin: 10, people: 3 });
+
+      expect(respuesta.status).toBe(201);
+      const nueva = respuesta.body.cuenta.lineas.at(-1);
+      expect(nueva).toMatchObject({ tipo: "HEAT", duracionMin: 10, cantidad: 3, precioUnitario: 3000, monto: 9000 });
+      expect(nueva.creadoPor).toBe("administrador@srp.test");
+      expect(fake.eventosAuditoria.find((e) => e.accion === "CUENTA_LINEA_AGREGADA")).toBeTruthy();
+    });
+
+    it("POST .../account/lines agrega ninos acompanantes y ajustes", async () => {
+      const { app, codigoPublico, auth } = await escenarioCuenta();
+
+      const ninos = await request(app)
+        .post(`${URL_CUENTA(codigoPublico)}/lines`)
+        .set("Authorization", auth)
+        .send({ type: "CHILD", children: 2, heats: 2 });
+      expect(ninos.status).toBe(201);
+      expect(ninos.body.cuenta.lineas.at(-1)).toMatchObject({ tipo: "NINO_ACOMPANADO", cantidad: 4, monto: 4000 });
+
+      const ajuste = await request(app)
+        .post(`${URL_CUENTA(codigoPublico)}/lines`)
+        .set("Authorization", auth)
+        .send({ type: "ADJUSTMENT", amount: -500, note: "Redondeo" });
+      expect(ajuste.status).toBe(201);
+      expect(ajuste.body.cuenta.lineas.at(-1)).toMatchObject({ tipo: "AJUSTE", monto: -500 });
+    });
+
+    it("POST .../account/lines valida el cuerpo", async () => {
+      const { app, codigoPublico, auth } = await escenarioCuenta();
+      const enviar = (cuerpo: object) =>
+        request(app).post(`${URL_CUENTA(codigoPublico)}/lines`).set("Authorization", auth).send(cuerpo);
+
+      expect((await enviar({})).status).toBe(400);
+      expect((await enviar({ type: "OTRO" })).status).toBe(400);
+      expect((await enviar({ type: "HEAT", durationMin: 12, people: 3 })).status).toBe(400);
+      expect((await enviar({ type: "HEAT", durationMin: 10, people: 0 })).status).toBe(400);
+      expect((await enviar({ type: "ADJUSTMENT", amount: 0, note: "x" })).status).toBe(400);
+    });
+
+    it("PUT .../account/lines/:id cambia la duracion del heat reservado y recalcula el precio", async () => {
+      const { app, fake, codigoPublico, auth } = await escenarioCuenta();
+      const lineaId = (await request(app).get(URL_CUENTA(codigoPublico)).set("Authorization", auth)).body.cuenta.lineas[0].id;
+
+      const respuesta = await request(app)
+        .put(`${URL_CUENTA(codigoPublico)}/lines/${lineaId}`)
+        .set("Authorization", auth)
+        .send({ durationMin: 10 });
+
+      expect(respuesta.status).toBe(200);
+      expect(respuesta.body.cuenta.lineas[0]).toMatchObject({ duracionMin: 10, precioUnitario: 2500, monto: 12500 });
+      expect(fake.eventosAuditoria.find((e) => e.accion === "CUENTA_LINEA_MODIFICADA")).toBeTruthy();
+    });
+
+    it("DELETE .../account/lines/:id quita la linea; la ultima da 409", async () => {
+      const { app, fake, codigoPublico, auth } = await escenarioCuenta();
+      const agregada = await request(app)
+        .post(`${URL_CUENTA(codigoPublico)}/lines`)
+        .set("Authorization", auth)
+        .send({ type: "HEAT", durationMin: 15, people: 2 });
+      const [base, extra] = agregada.body.cuenta.lineas;
+
+      const quitada = await request(app).delete(`${URL_CUENTA(codigoPublico)}/lines/${extra.id}`).set("Authorization", auth);
+      expect(quitada.status).toBe(200);
+      expect(quitada.body.cuenta.lineas).toHaveLength(1);
+      expect(fake.eventosAuditoria.find((e) => e.accion === "CUENTA_LINEA_ELIMINADA")).toBeTruthy();
+
+      const ultima = await request(app).delete(`${URL_CUENTA(codigoPublico)}/lines/${base.id}`).set("Authorization", auth);
+      expect(ultima.status).toBe(409);
+      expect(ultima.body.error).toBe("ULTIMA_LINEA");
+
+      const inexistente = await request(app).delete(`${URL_CUENTA(codigoPublico)}/lines/no-existe`).set("Authorization", auth);
+      expect(inexistente.status).toBe(404);
+    });
+
+    it("POST .../account/payments registra el cobro exacto, cierra la reserva y audita", async () => {
+      const { app, fake, codigoPublico, auth } = await escenarioCuenta();
+
+      const respuesta = await request(app)
+        .post(`${URL_CUENTA(codigoPublico)}/payments`)
+        .set("Authorization", auth)
+        .send({ amount: 10500, method: "CASH", note: "Entregaron 500 de mas" });
+
+      expect(respuesta.status).toBe(201);
+      expect(respuesta.body.cuenta.saldo).toBe(-500);
+      expect(fake.reservas.find((r) => r.codigoPublico === codigoPublico)!.estado).toBe("PAGADA");
+      expect(fake.payments.at(-1)).toMatchObject({ tipo: "SALDO", monto: 10500, metodo: "EFECTIVO", registradoPor: "administrador@srp.test" });
+      expect(fake.eventosAuditoria.find((e) => e.accion === "CUENTA_PAGO_REGISTRADO")).toBeTruthy();
+    });
+
+    it("POST .../account/payments traduce el metodo y valida monto y metodo", async () => {
+      const { app, fake, codigoPublico, auth } = await escenarioCuenta();
+      const enviar = (cuerpo: object) =>
+        request(app).post(`${URL_CUENTA(codigoPublico)}/payments`).set("Authorization", auth).send(cuerpo);
+
+      expect((await enviar({ amount: 1000, method: "SINPE" })).status).toBe(201);
+      expect(fake.payments.at(-1)!.metodo).toBe("SINPE_MANUAL");
+      expect((await enviar({ amount: 1000, method: "BANK_TRANSFER" })).status).toBe(201);
+      expect(fake.payments.at(-1)!.metodo).toBe("TRANSFERENCIA_BANCARIA");
+
+      expect((await enviar({ amount: 0, method: "CASH" })).status).toBe(400);
+      expect((await enviar({ amount: "mil", method: "CASH" })).status).toBe(400);
+      expect((await enviar({ amount: 1000, method: "BITCOIN" })).status).toBe(400);
+      expect((await enviar({ amount: 1000 })).status).toBe(400);
+    });
+
+    it("una reserva que no esta confirmada ni pagada responde 409; una inexistente, 404", async () => {
+      const { app, fake, codigoPublico, auth } = await escenarioCuenta();
+      fake.reservas.find((r) => r.codigoPublico === codigoPublico)!.estado = "CANCELADA";
+
+      expect((await request(app).get(URL_CUENTA(codigoPublico)).set("Authorization", auth)).status).toBe(409);
+      expect((await request(app).get(URL_CUENTA("SRP-NO-EXISTE")).set("Authorization", auth)).status).toBe(404);
+    });
+
+    it("exige sesion; Operacion no puede ver ni cobrar; Atencion edita lineas pero no cobra", async () => {
+      const { app, codigoPublico } = await escenarioCuenta();
+      expect((await request(app).get(URL_CUENTA(codigoPublico))).status).toBe(401);
+
+      const { fake, app: app2, codigoPublico: codigo2 } = await escenarioCuenta();
+      const operacion = await tokenAdminDePrueba(fake, "OPERACION");
+      const atencion = await tokenAdminDePrueba(fake, "ATENCION");
+      expect((await request(app2).get(URL_CUENTA(codigo2)).set("Authorization", operacion)).status).toBe(403);
+      expect((await request(app2).get(URL_CUENTA(codigo2)).set("Authorization", atencion)).status).toBe(200);
+      expect(
+        (await request(app2).post(`${URL_CUENTA(codigo2)}/payments`).set("Authorization", atencion).send({ amount: 100, method: "CASH" })).status,
+      ).toBe(403);
+    });
+  });
+
   describe("cambio de personas por encima del limite de 5 por heat", () => {
     it("GET .../people-options: 5 -> 8 pide decision y ofrece mismo slot (8) o repartir (4 + 4)", async () => {
       const fake = new FakePrisma();

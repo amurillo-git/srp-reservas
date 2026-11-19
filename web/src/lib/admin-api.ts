@@ -694,3 +694,152 @@ export async function iniciarSaldoTarjetaAdmin(
   }
   return { ok: false, motivo: cuerpo.motivo ?? cuerpo.error ?? "No se pudo iniciar el pago con tarjeta" };
 }
+
+// ----------------------------------------------------------------------------
+// Cuenta de la reserva: consumo real en el parque (heat de 10 o 15 min, heats
+// extra, ninos acompanantes, ajustes) y cobros en caja con monto exacto.
+// ----------------------------------------------------------------------------
+
+export type TipoLineaCuenta = "HEAT" | "NINO_ACOMPANADO" | "AJUSTE";
+
+export interface LineaCuenta {
+  readonly id: string;
+  readonly tipo: TipoLineaCuenta;
+  readonly descripcion: string;
+  readonly duracionMin: number | null;
+  readonly cantidad: number;
+  readonly precioUnitario: number;
+  readonly monto: number;
+  readonly esBase: boolean;
+  readonly creadoPor: string | null;
+  readonly creadoEn: string;
+}
+
+export interface PagoCuenta {
+  readonly id: string;
+  readonly tipo: "DEPOSITO" | "SALDO";
+  readonly monto: number;
+  readonly metodo: string;
+  readonly pagadoEn: string | null;
+  readonly nota: string | null;
+  readonly registradoPor: string | null;
+}
+
+export interface TarifasCuenta {
+  readonly heat15GrupoPequeno: number;
+  readonly heat15GrupoGrande: number;
+  readonly heat10GrupoPequeno: number;
+  readonly heat10GrupoGrande: number;
+  readonly ninoAcompanado: number;
+  readonly umbralGrupoGrande: number;
+}
+
+export interface CuentaReserva {
+  readonly codigoPublico: string;
+  readonly estado: string;
+  readonly moneda: string;
+  readonly cantidadPersonas: number;
+  readonly lineas: readonly LineaCuenta[];
+  readonly pagos: readonly PagoCuenta[];
+  readonly totalConsumido: number;
+  readonly totalPagado: number;
+  /** Total consumido - total pagado. Negativo = el cliente pago de mas. */
+  readonly saldo: number;
+  readonly tarifas: TarifasCuenta;
+}
+
+export type ResultadoCuentaAdmin =
+  | { readonly ok: true; readonly cuenta: CuentaReserva }
+  | { readonly ok: false; readonly motivo: string };
+
+export type EntradaLineaCuenta =
+  | { readonly type: "HEAT"; readonly durationMin: 10 | 15; readonly people: number; readonly unitPrice?: number }
+  | { readonly type: "CHILD"; readonly children: number; readonly heats: number; readonly unitPrice?: number }
+  | { readonly type: "ADJUSTMENT"; readonly amount: number; readonly note: string };
+
+export interface CambiosLineaCuenta {
+  readonly durationMin?: number;
+  readonly quantity?: number;
+  readonly unitPrice?: number;
+  readonly description?: string;
+}
+
+export type MetodoCobroCaja = "CASH" | "SINPE" | "BANK_TRANSFER";
+
+function aResultadoCuenta(
+  status: number,
+  esperado: number,
+  datos: { cuenta?: CuentaReserva; error?: string },
+  mensajeError: string,
+): ResultadoCuentaAdmin {
+  if (status === esperado && datos.cuenta) return { ok: true, cuenta: datos.cuenta };
+  return { ok: false, motivo: datos.error ?? mensajeError };
+}
+
+export async function obtenerCuentaAdmin(token: string, codigoPublico: string): Promise<ResultadoCuentaAdmin> {
+  try {
+    const datos = await obtenerJsonAdmin<{ cuenta: CuentaReserva }>(
+      `/admin/reservations/${codigoPublico}/account`,
+      token,
+    );
+    return { ok: true, cuenta: datos.cuenta };
+  } catch (error) {
+    return { ok: false, motivo: error instanceof ApiError ? error.message : "No se pudo consultar la cuenta" };
+  }
+}
+
+export async function agregarLineaCuentaAdmin(
+  token: string,
+  codigoPublico: string,
+  entrada: EntradaLineaCuenta,
+): Promise<ResultadoCuentaAdmin> {
+  const { status, datos } = await enviarJsonAdmin<{ cuenta?: CuentaReserva; error?: string }>(
+    "POST",
+    `/admin/reservations/${codigoPublico}/account/lines`,
+    token,
+    entrada,
+  );
+  return aResultadoCuenta(status, 201, datos, "No se pudo agregar a la cuenta");
+}
+
+export async function modificarLineaCuentaAdmin(
+  token: string,
+  codigoPublico: string,
+  lineaId: string,
+  cambios: CambiosLineaCuenta,
+): Promise<ResultadoCuentaAdmin> {
+  const { status, datos } = await enviarJsonAdmin<{ cuenta?: CuentaReserva; error?: string }>(
+    "PUT",
+    `/admin/reservations/${codigoPublico}/account/lines/${lineaId}`,
+    token,
+    cambios,
+  );
+  return aResultadoCuenta(status, 200, datos, "No se pudo modificar la línea");
+}
+
+export async function eliminarLineaCuentaAdmin(
+  token: string,
+  codigoPublico: string,
+  lineaId: string,
+): Promise<ResultadoCuentaAdmin> {
+  const { status, datos } = await enviarJsonAdmin<{ cuenta?: CuentaReserva; error?: string }>(
+    "DELETE",
+    `/admin/reservations/${codigoPublico}/account/lines/${lineaId}`,
+    token,
+  );
+  return aResultadoCuenta(status, 200, datos, "No se pudo quitar la línea");
+}
+
+export async function registrarPagoCuentaAdmin(
+  token: string,
+  codigoPublico: string,
+  pago: { readonly amount: number; readonly method: MetodoCobroCaja; readonly note?: string },
+): Promise<ResultadoCuentaAdmin> {
+  const { status, datos } = await enviarJsonAdmin<{ cuenta?: CuentaReserva; error?: string }>(
+    "POST",
+    `/admin/reservations/${codigoPublico}/account/payments`,
+    token,
+    pago,
+  );
+  return aResultadoCuenta(status, 201, datos, "No se pudo registrar el cobro");
+}

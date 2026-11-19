@@ -53,6 +53,9 @@ export interface FilaServicio {
   moneda: string;
   precioPorPersonaGrupoPequeno: number;
   precioPorPersonaGrupoGrande: number;
+  precio10GrupoPequeno: number;
+  precio10GrupoGrande: number;
+  precioNinoAcompanado: number;
   porcentajeDeposito: number;
   activo: boolean;
   pagoTarjetaHabilitado: boolean;
@@ -203,11 +206,27 @@ export interface FilaPago {
   tipo: "DEPOSITO" | "SALDO";
   monto: number;
   moneda: string;
-  metodo: "SINPE_MANUAL" | "SINPE_ONVO" | "TARJETA_ONVO";
+  metodo: "SINPE_MANUAL" | "SINPE_ONVO" | "TARJETA_ONVO" | "EFECTIVO" | "TRANSFERENCIA_BANCARIA";
   estado: "PENDIENTE" | "PAGADO" | "RECHAZADO";
   onvoPaymentIntentId?: string | null;
   creadoEn: Date;
   pagadoEn?: Date | null;
+  nota?: string | null;
+  registradoPor?: string | null;
+}
+
+export interface FilaConsumo {
+  id: Id;
+  reservationId: Id;
+  tipo: "HEAT" | "NINO_ACOMPANADO" | "AJUSTE";
+  descripcion: string;
+  duracionMin: number | null;
+  cantidad: number;
+  precioUnitario: number;
+  monto: number;
+  esBase: boolean;
+  creadoPor: string | null;
+  creadoEn: Date;
 }
 
 export class FakePrisma {
@@ -223,6 +242,7 @@ export class FakePrisma {
   readonly usuarios: FilaUsuario[] = [];
   readonly eventosAuditoria: FilaEventoAuditoria[] = [];
   readonly payments: FilaPago[] = [];
+  readonly consumos: FilaConsumo[] = [];
   configuracionPagoFila: { id: string; modoSinpe: "MANUAL" | "ONVO" } | null = null;
 
   private proximoConflictoUnico: { tabla: "heat" | "reservation"; target: string; vecesRestantes: number } | null =
@@ -237,6 +257,9 @@ export class FakePrisma {
       moneda: "CRC",
       precioPorPersonaGrupoPequeno: 4000,
       precioPorPersonaGrupoGrande: 4000,
+      precio10GrupoPequeno: 3000,
+      precio10GrupoGrande: 2500,
+      precioNinoAcompanado: 1000,
       porcentajeDeposito: 50,
       activo: true,
       pagoTarjetaHabilitado: false,
@@ -785,6 +808,44 @@ export class FakePrisma {
     },
   };
 
+  readonly consumoReserva = {
+    create: async ({
+      data,
+    }: {
+      data: Omit<FilaConsumo, "id" | "creadoEn" | "esBase" | "creadoPor" | "duracionMin"> &
+        Partial<Pick<FilaConsumo, "esBase" | "creadoPor" | "duracionMin">>;
+    }) => {
+      const fila: FilaConsumo = {
+        id: nuevoId("consumo"),
+        creadoEn: new Date(),
+        esBase: false,
+        creadoPor: null,
+        duracionMin: null,
+        ...data,
+      };
+      this.consumos.push(fila);
+      return fila;
+    },
+    findMany: async ({ where }: { where?: { reservationId?: Id } } = {}) =>
+      this.consumos.filter((c) => where?.reservationId === undefined || c.reservationId === where.reservationId),
+    findUnique: async ({ where }: { where: { id: Id } }) => this.consumos.find((c) => c.id === where.id) ?? null,
+    count: async ({ where }: { where?: { reservationId?: Id } } = {}) =>
+      this.consumos.filter((c) => where?.reservationId === undefined || c.reservationId === where.reservationId)
+        .length,
+    update: async ({ where, data }: { where: { id: Id }; data: Partial<FilaConsumo> }) => {
+      const fila = this.consumos.find((c) => c.id === where.id);
+      if (!fila) throw new Error(`ConsumoReserva ${where.id} no existe (fake)`);
+      Object.assign(fila, data);
+      return fila;
+    },
+    delete: async ({ where }: { where: { id: Id } }) => {
+      const indice = this.consumos.findIndex((c) => c.id === where.id);
+      if (indice < 0) throw new Error(`ConsumoReserva ${where.id} no existe (fake)`);
+      const [fila] = this.consumos.splice(indice, 1);
+      return fila!;
+    },
+  };
+
   readonly configuracionPago = {
     findUnique: async ({ where }: { where: { id: string } }) =>
       this.configuracionPagoFila && this.configuracionPagoFila.id === where.id ? this.configuracionPagoFila : null,
@@ -915,6 +976,7 @@ export class FakePrisma {
       comprobantesSinpe: [...this.comprobantesSinpe],
       usuarios: [...this.usuarios],
       payments: [...this.payments],
+      consumos: [...this.consumos],
     };
     try {
       return await fn(this);
@@ -930,6 +992,7 @@ export class FakePrisma {
       this.comprobantesSinpe.splice(0, this.comprobantesSinpe.length, ...copia.comprobantesSinpe);
       this.usuarios.splice(0, this.usuarios.length, ...copia.usuarios);
       this.payments.splice(0, this.payments.length, ...copia.payments);
+      this.consumos.splice(0, this.consumos.length, ...copia.consumos);
       throw error;
     }
   }

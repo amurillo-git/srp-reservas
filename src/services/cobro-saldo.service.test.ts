@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import { ajustarAsistentesReales, marcarSaldoPagadoManual } from "./cobro-saldo.service.js";
 import { establecerModoSinpe } from "./configuracion-pago.service.js";
+import { agregarLinea, obtenerCuenta } from "./cuenta-reserva.service.js";
 import { FakePrisma, type FilaReserva } from "./testing/fake-prisma.js";
 
 function comoPrisma(fake: FakePrisma): PrismaClient {
@@ -133,6 +134,23 @@ describe("ajustarAsistentesReales", () => {
     expect(reserva.montoTotal).toBe(5000); // 1 x 5000
     expect(reserva.montoDeposito).toBe(20000); // intacto, mayor al nuevo total
     expect(reserva.montoSaldo).toBe(0);
+  });
+
+  it("con la cuenta abierta: reajusta la linea reservada y conserva los consumos extra", async () => {
+    const fake = new FakePrisma();
+    crearServicioBase(fake);
+    crearReservaConfirmada(fake, { cantidadPersonas: 8, montoTotal: 32000, montoDeposito: 20000, montoSaldo: 12000 });
+    const prisma = comoPrisma(fake);
+    await obtenerCuenta(prisma, "SRP-0001");
+    await agregarLinea(prisma, "SRP-0001", { tipo: "NINO_ACOMPANADO", ninos: 1, heats: 1 }); // +1000 (fake)
+
+    const resultado = await ajustarAsistentesReales(prisma, "SRP-0001", 5);
+
+    expect(resultado).toEqual({ ok: true });
+    // 5 personas = grupo grande (4000 c/u) en este servicio de prueba.
+    expect(fake.consumos.find((c) => c.esBase)).toMatchObject({ cantidad: 5, precioUnitario: 4000, monto: 20000 });
+    expect(fake.reservas[0]!.montoTotal).toBe(21000);
+    expect(fake.reservas[0]!.montoSaldo).toBe(1000); // 21000 - 20000 de deposito
   });
 
   it("no hace nada si la cantidad real es igual a la reservada", async () => {

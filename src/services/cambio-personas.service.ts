@@ -23,6 +23,7 @@
 // ============================================================================
 
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { sincronizarCuentaTrasCambioDePersonas } from "./cuenta-reserva.service.js";
 import {
   CAPACIDAD_MAXIMA_POR_HEAT,
   calcularPrecio,
@@ -409,7 +410,16 @@ export async function aplicarCambioPersonas(
             },
           });
 
-          return { ok: true, modo: modoFinal, montoTotal: montos.montoTotal, montoSaldo: montos.montoSaldo };
+          // Si la cuenta de la reserva ya se abrio (consumo real en el parque),
+          // se reajustan sus lineas base y los montos finales salen de la cuenta.
+          await sincronizarCuentaTrasCambioDePersonas(tx, reserva.id, nuevaCantidad);
+          const final = await tx.reservation.findUnique({ where: { id: reserva.id } });
+          return {
+            ok: true,
+            modo: modoFinal,
+            montoTotal: Number(final?.montoTotal ?? montos.montoTotal),
+            montoSaldo: Number(final?.montoSaldo ?? montos.montoSaldo),
+          };
         },
         { maxWait: 5_000, timeout: 10_000 },
       );

@@ -34,6 +34,18 @@ import {
   consultarOpcionesCambioPersonas,
   type ModoCambioPersonas,
 } from "../services/cambio-personas.service.js";
+import {
+  agregarLinea,
+  eliminarLinea,
+  modificarLinea,
+  obtenerCuenta,
+  registrarPago,
+  type CambiosLinea,
+  type EntradaLinea,
+  type EntradaPago,
+  type MetodoCobroCaja,
+  type ResultadoCuenta,
+} from "../services/cuenta-reserva.service.js";
 import { iniciarSesion } from "../services/auth.service.js";
 import { requireAuth, type RequestAutenticado } from "./auth.middleware.js";
 import { listarEventos, registrarEvento, type ActorAuditoria } from "../services/auditoria.service.js";
@@ -120,6 +132,47 @@ function conManejoDeErrores(
   return (req, res, next) => {
     handler(req, res).catch(next);
   };
+}
+
+/** Metodos de cobro en caja tal como los envia la web -> valor interno. */
+const METODOS_COBRO_CAJA_API: Readonly<Record<string, MetodoCobroCaja>> = {
+  CASH: "EFECTIVO",
+  SINPE: "SINPE_MANUAL",
+  BANK_TRANSFER: "TRANSFERENCIA_BANCARIA",
+};
+
+/** Traduce el cuerpo de "agregar linea a la cuenta". Devuelve null si `type`
+ * no es reconocido; la validacion de los valores la hace el servicio. */
+function leerEntradaLinea(cuerpo: unknown): EntradaLinea | null {
+  const c = (cuerpo ?? {}) as Record<string, unknown>;
+  const precio = c.unitPrice !== undefined ? { precioUnitario: c.unitPrice as number } : {};
+  if (c.type === "HEAT") {
+    return { tipo: "HEAT", duracionMin: c.durationMin as number, personas: c.people as number, ...precio };
+  }
+  if (c.type === "CHILD") {
+    return { tipo: "NINO_ACOMPANADO", ninos: c.children as number, heats: c.heats as number, ...precio };
+  }
+  if (c.type === "ADJUSTMENT") {
+    return { tipo: "AJUSTE", monto: c.amount as number, nota: c.note as string };
+  }
+  return null;
+}
+
+/** Responde con la cuenta o con el error HTTP que corresponde al motivo.
+ * Devuelve true si fue exitosa. */
+function responderCuenta(res: Response, resultado: ResultadoCuenta, statusExito: number): boolean {
+  if (resultado.ok) {
+    res.status(statusExito).json({ cuenta: resultado.cuenta });
+    return true;
+  }
+  const status =
+    resultado.motivo === "NO_ENCONTRADA" || resultado.motivo === "LINEA_NO_ENCONTRADA"
+      ? 404
+      : resultado.motivo === "DATOS_INVALIDOS"
+        ? 400
+        : 409;
+  enviarError(res, status, resultado.motivo);
+  return false;
 }
 
 /** Actor de auditoria (21) desde el JWT que `requireAuth` ya valido y
@@ -656,6 +709,92 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
       }
       const status = resultado.motivo === "NO_ENCONTRADA" ? 404 : resultado.motivo === "CANTIDAD_INVALIDA" ? 400 : 409;
       enviarError(res, status, resultado.motivo);
+    }),
+  );
+
+  // Cuenta de la reserva: consumo real en el parque (heat de 10 o 15 min, heats
+  // extra para todo el grupo o un subgrupo, ninos acompanantes, ajustes) y
+  // cobros en caja con el monto exacto. Ver cuenta-reserva.service.ts.
+  router.get(
+    "/admin/reservations/:publicCode/account",
+    requireAuth(ROLES_CAMBIAN_PERSONAS),
+    conManejoDeErrores(async (req, res) => {
+      responderCuenta(res, await obtenerCuenta(prisma, req.params.publicCode!), 200);
+    }),
+  );
+
+  router.post(
+    "/admin/reservations/:publicCode/account/lines",
+    requireAuth(ROLES_CAMBIAN_PERSONAS),
+    conManejoDeErrores(async (req, res) => {
+      const entrada = leerEntradaLinea(req.body);
+      if (!entrada) return enviarError(res, 400, "type debe ser HEAT, CHILD o ADJUSTMENT");
+
+      const actor = actorDesde(req);
+      const resultado = await agregarLinea(prisma, req.params.publicCode!, entrada, actor.email);
+      if (responderCuenta(res, resultado, 201)) {
+        await registrarEvento(prisma, actor, {
+          accion: "CUENTA_LINEA_AGREGADA", objetoTipo: "RESERVA", objetoId: req.params.publicCode!,
+          valoresNuevos: entrada,
+        });
+      }
+    }),
+  );
+
+  router.put(
+    "/admin/reservations/:publicCode/account/lines/:lineId",
+    requireAuth(ROLES_CAMBIAN_PERSONAS),
+    conManejoDeErrores(async (req, res) => {
+      const { durationMin, quantity, unitPrice, description } = req.body ?? {};
+      const cambios: CambiosLinea = {
+        ...(durationMin !== undefined ? { duracionMin: durationMin } : {}),
+        ...(quantity !== undefined ? { cantidad: quantity } : {}),
+        ...(unitPrice !== undefined ? { precioUnitario: unitPrice } : {}),
+        ...(description !== undefined ? { descripcion: description } : {}),
+      };
+
+      const resultado = await modificarLinea(prisma, req.params.publicCode!, req.params.lineId!, cambios);
+      if (responderCuenta(res, resultado, 200)) {
+        await registrarEvento(prisma, actorDesde(req), {
+          accion: "CUENTA_LINEA_MODIFICADA", objetoTipo: "RESERVA", objetoId: req.params.publicCode!,
+          valoresNuevos: { lineId: req.params.lineId, ...cambios },
+        });
+      }
+    }),
+  );
+
+  router.delete(
+    "/admin/reservations/:publicCode/account/lines/:lineId",
+    requireAuth(ROLES_CAMBIAN_PERSONAS),
+    conManejoDeErrores(async (req, res) => {
+      const resultado = await eliminarLinea(prisma, req.params.publicCode!, req.params.lineId!);
+      if (responderCuenta(res, resultado, 200)) {
+        await registrarEvento(prisma, actorDesde(req), {
+          accion: "CUENTA_LINEA_ELIMINADA", objetoTipo: "RESERVA", objetoId: req.params.publicCode!,
+          valoresNuevos: { lineId: req.params.lineId },
+        });
+      }
+    }),
+  );
+
+  router.post(
+    "/admin/reservations/:publicCode/account/payments",
+    requireAuth(ROLES_VALIDAN_SINPE),
+    conManejoDeErrores(async (req, res) => {
+      const { amount, method, note } = req.body ?? {};
+      const metodo = typeof method === "string" ? METODOS_COBRO_CAJA_API[method] : undefined;
+      if (!metodo) return enviarError(res, 400, "method debe ser CASH, SINPE o BANK_TRANSFER");
+      if (typeof amount !== "number") return enviarError(res, 400, "amount debe ser un numero");
+
+      const actor = actorDesde(req);
+      const entrada: EntradaPago = { monto: amount, metodo, ...(note !== undefined ? { nota: note } : {}) };
+      const resultado = await registrarPago(prisma, req.params.publicCode!, entrada, actor.email);
+      if (responderCuenta(res, resultado, 201)) {
+        await registrarEvento(prisma, actor, {
+          accion: "CUENTA_PAGO_REGISTRADO", objetoTipo: "RESERVA", objetoId: req.params.publicCode!,
+          valoresNuevos: { monto: amount, metodo },
+        });
+      }
     }),
   );
 

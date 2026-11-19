@@ -85,9 +85,13 @@ enum TipoPago {
 }
 
 enum MetodoPago {
+  /// SINPE Movil verificado por el personal en el parque.
   SINPE_MANUAL
   SINPE_ONVO
   TARJETA_ONVO
+  /// Cobros en caja (cuenta de la reserva): efectivo y transferencia bancaria.
+  EFECTIVO
+  TRANSFERENCIA_BANCARIA
 
   @@map("metodo_pago")
 }
@@ -98,6 +102,18 @@ enum EstadoPago {
   RECHAZADO
 
   @@map("estado_pago")
+}
+
+/// Tipos de linea de la cuenta de una reserva (consumo real en el parque).
+enum TipoConsumo {
+  /// Un heat corrido (10 o 15 min) por N personas.
+  HEAT
+  /// Nino que viaja en el kart del adulto (adicional por nino y por heat).
+  NINO_ACOMPANADO
+  /// Ajuste libre (positivo o negativo) con nota, p. ej. redondeos.
+  AJUSTE
+
+  @@map("tipo_consumo")
 }
 
 enum ModoSinpe {
@@ -117,6 +133,12 @@ model Service {
   precioPorPersonaGrupoPequeno Decimal  @map("precio_por_persona_grupo_pequeno") @db.Decimal(10, 2)
   /// Tarifa para grupos de 5 personas o mas (mas economica).
   precioPorPersonaGrupoGrande  Decimal  @map("precio_por_persona_grupo_grande") @db.Decimal(10, 2)
+  /// Tarifas del heat de 10 minutos (el heat "normal" de 15 min usa las dos
+  /// de arriba). Misma regla de grupo: 1-4 personas pequeno, 5 o mas grande.
+  precio10GrupoPequeno         Decimal  @default(6000) @map("precio_10_grupo_pequeno") @db.Decimal(10, 2)
+  precio10GrupoGrande          Decimal  @default(5500) @map("precio_10_grupo_grande") @db.Decimal(10, 2)
+  /// Adicional por nino que viaja en el kart de un adulto, por heat.
+  precioNinoAcompanado         Decimal  @default(1000) @map("precio_nino_acompanado") @db.Decimal(10, 2)
   porcentajeDeposito           Int      @default(50) @map("porcentaje_deposito") // 6.7.4
   activo                       Boolean  @default(true)
   /// Visibilidad de "pagar con tarjeta" al cliente (6.8). Por defecto apagado:
@@ -312,6 +334,7 @@ model Reservation {
   asignaciones  HeatAllocation[]
   sinpeEvidence SinpeEvidence?
   pagos         Payment[]
+  consumos      ConsumoReserva[]
 
   @@index([servicioId, fecha])
   @@map("reservations")
@@ -337,11 +360,44 @@ model Payment {
   onvoPaymentIntentId String?    @unique @map("onvo_payment_intent_id")
   creadoEn            DateTime   @default(now()) @map("creado_en")
   pagadoEn            DateTime?  @map("pagado_en")
+  /// Cobros en caja: nota libre (p. ej. referencia de la transferencia) y quien
+  /// registro el cobro. Null en los cobros automaticos (ONVO).
+  nota                String?
+  registradoPor       String?    @map("registrado_por")
 
   reservation Reservation @relation(fields: [reservationId], references: [id])
 
   @@index([reservationId])
   @@map("payments")
+}
+
+/// Linea de la cuenta de una reserva: lo que realmente se consumio en el
+/// parque (heats corridos, ninos acompanantes, ajustes). Una vez abierta la
+/// cuenta, la suma de estas lineas es el total de la reserva; el saldo es ese
+/// total menos lo pagado (Payment). Guarda cantidad y precio unitario para
+/// poder generar facturas electronicas con el detalle exacto.
+model ConsumoReserva {
+  id             String       @id @default(cuid())
+  reservationId  String       @map("reservation_id")
+  tipo           TipoConsumo
+  descripcion    String
+  /// Solo para HEAT: 10 o 15.
+  duracionMin    Int?         @map("duracion_min")
+  /// HEAT: personas. NINO_ACOMPANADO: ninos x heats. AJUSTE: 1.
+  cantidad       Int
+  precioUnitario Decimal      @map("precio_unitario") @db.Decimal(10, 2)
+  /// cantidad x precioUnitario (puede ser negativo solo en AJUSTE).
+  monto          Decimal      @db.Decimal(10, 2)
+  /// true = linea generada automaticamente a partir de lo reservado. Es la que
+  /// se reajusta si cambia la cantidad de personas de la reserva.
+  esBase         Boolean      @default(false) @map("es_base")
+  creadoPor      String?      @map("creado_por")
+  creadoEn       DateTime     @default(now()) @map("creado_en")
+
+  reservation Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+
+  @@index([reservationId])
+  @@map("consumos_reserva")
 }
 
 /// Configuracion global de un unico registro (25): que metodo de deteccion

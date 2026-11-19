@@ -10,6 +10,7 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import { obtenerModoSinpe } from "./configuracion-pago.service.js";
 import { calcularPrecio } from "../motor-disponibilidad/motor-disponibilidad.js";
+import { sincronizarCuentaTrasCambioDePersonas } from "./cuenta-reserva.service.js";
 
 async function bloquearYLeerReservaPorCodigo(tx: Prisma.TransactionClient, codigoPublico: string) {
   const previa = await tx.reservation.findUnique({ where: { codigoPublico } });
@@ -117,6 +118,9 @@ export async function ajustarAsistentesReales(
         montoSaldo: Math.max(0, precio.montoTotal - Number(reserva.montoDeposito)),
       },
     });
+    // Si la cuenta de la reserva ya se abrio, sus lineas base y los montos
+    // finales salen de la cuenta (con los consumos extra incluidos).
+    await sincronizarCuentaTrasCambioDePersonas(tx, reserva.id, cantidadReal);
 
     return { ok: true };
   });

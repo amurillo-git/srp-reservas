@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { consultarReserva, obtenerConfiguracionPago, type ModoSinpe } from "@/lib/api";
 import { formatoFechaHora12, formatoHora12, formatoMoneda, hoyISO, reservaEnHoraActual } from "@/lib/format";
 import { CambioPersonas } from "./cambio-personas";
+import { CuentaReservaPanel } from "./cuenta-reserva";
 import { TimeInput12h } from "./time-input-12h";
 import {
   ajustarAsistentesAdmin,
@@ -78,6 +79,7 @@ export function ReservationsSearch({ token, serviceId }: { token: string; servic
   const [formulario, setFormulario] = useState<FormularioReprogramar>({ date: "", startTime: "", partySize: 1 });
   const [procesando, setProcesando] = useState<string | null>(null);
   const [cobrando, setCobrando] = useState<string | null>(null);
+  const [cuentaAbierta, setCuentaAbierta] = useState<string | null>(null);
   const [cambiandoPersonas, setCambiandoPersonas] = useState<string | null>(null);
   const [modoSinpe, setModoSinpe] = useState<ModoSinpe>("MANUAL");
   // Se refresca cada minuto para que el resaltado de "hora actual" avance solo.
@@ -258,7 +260,17 @@ export function ReservationsSearch({ token, serviceId }: { token: string; servic
                 </div>
                 <div className="flex items-center gap-2">
                   <Badge variant={VARIANTE_POR_ESTADO[r.estado] ?? "outline"}>{r.estado}</Badge>
-                  {r.estado === "CONFIRMADA" && (
+                  {(r.estado === "CONFIRMADA" || r.estado === "PAGADA") && (
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      onClick={() => setCuentaAbierta(cuentaAbierta === r.codigoPublico ? null : r.codigoPublico)}
+                      disabled={procesando === r.codigoPublico}
+                    >
+                      Cuenta y cobro
+                    </Button>
+                  )}
+                  {r.estado === "CONFIRMADA" && modoSinpe === "ONVO" && (
                     <Button
                       variant="outline"
                       size="xs"
@@ -312,6 +324,15 @@ export function ReservationsSearch({ token, serviceId }: { token: string; servic
                     onCancelar={() => setCambiandoPersonas(null)}
                   />
                 </div>
+              )}
+
+              {cuentaAbierta === r.codigoPublico && (
+                <CuentaReservaPanel
+                  token={token}
+                  codigoPublico={r.codigoPublico}
+                  onCambio={() => void buscar()}
+                  onCerrar={() => setCuentaAbierta(null)}
+                />
               )}
 
               {cobrando === r.codigoPublico && (
