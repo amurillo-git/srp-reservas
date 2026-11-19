@@ -9,6 +9,11 @@ import { expirarReservasVencidas } from "./services/expiracion.service.js";
 import { iniciarWorkerExpiracion } from "./worker/expiracion-worker.js";
 
 const app = express();
+// La API corre detras del proxy del hosting (Hostinger): sin esto, `req.ip` es
+// siempre la IP del proxy y el limite de intentos de la consulta publica
+// (reservas.router.ts) se compartiria entre todos los clientes. Un solo salto
+// de proxy confiable.
+app.set("trust proxy", 1);
 // Adaptador de conexion (pg) en vez del motor de consultas nativo de Prisma
 // (Rust): en el hosting compartido de produccion, el motor nativo entra en
 // PANIC: timer has gone away por el limite de procesos del sistema operativo

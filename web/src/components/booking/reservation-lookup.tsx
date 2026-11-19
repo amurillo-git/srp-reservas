@@ -9,8 +9,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { formatoFechaLarga, formatoMoneda, formatoRangoHora12 } from "@/lib/format";
-import { consultarReserva, obtenerConfiguracionPago, type ModoSinpe } from "@/lib/api";
+import { formatoFechaLarga, formatoHora12, formatoMoneda, formatoRangoHora12 } from "@/lib/format";
+import {
+  buscarReservasPorTelefono,
+  consultarReserva,
+  obtenerConfiguracionPago,
+  type ModoSinpe,
+} from "@/lib/api";
 import type { ReservaPublica } from "@/lib/types";
 import { PaymentStep } from "./steps/payment-step";
 
@@ -18,6 +23,7 @@ const ETIQUETA_ESTADO: Record<string, string> = {
   TEMPORAL: "Retenida, pendiente de pago",
   PENDIENTE_VALIDACION_SINPE: "Comprobante en revisión",
   CONFIRMADA: "Confirmada",
+  PAGADA: "Pagada",
   RECHAZADA: "Comprobante rechazado",
   CANCELADA: "Cancelada",
   EXPIRADA: "Vencida",
@@ -36,6 +42,47 @@ export function ReservationLookup() {
   const [reserva, setReserva] = useState<ReservaPublica | null | undefined>(undefined);
   const [buscando, setBuscando] = useState(false);
   const [modoSinpe, setModoSinpe] = useState<ModoSinpe>("MANUAL");
+
+  // Busqueda alternativa por telefono + fecha, para quien perdio el codigo.
+  const [porTelefono, setPorTelefono] = useState(false);
+  const [telefono, setTelefono] = useState("");
+  const [fechaBuscada, setFechaBuscada] = useState("");
+  const [candidatas, setCandidatas] = useState<readonly ReservaPublica[] | null>(null);
+  const [errorTelefono, setErrorTelefono] = useState<string | null>(null);
+
+  function cambiarModo(telefonoActivo: boolean) {
+    setPorTelefono(telefonoActivo);
+    setReserva(undefined);
+    setCandidatas(null);
+    setErrorTelefono(null);
+  }
+
+  async function buscarPorTelefono(evento: FormEvent) {
+    evento.preventDefault();
+    if (telefono.trim().length === 0 || fechaBuscada.length === 0) return;
+    setBuscando(true);
+    setErrorTelefono(null);
+    setReserva(undefined);
+    setCandidatas(null);
+    try {
+      const resultado = await buscarReservasPorTelefono(telefono.trim(), fechaBuscada);
+      if (!resultado.ok) {
+        setErrorTelefono(
+          resultado.motivo === "DEMASIADOS_INTENTOS"
+            ? "Hiciste demasiadas búsquedas seguidas. Esperá un minuto e intentá de nuevo."
+            : resultado.motivo === "DATOS_INVALIDOS"
+              ? "Revisá el teléfono (8 dígitos) y la fecha."
+              : "No pudimos consultar tu reserva. Intentá de nuevo.",
+        );
+        return;
+      }
+      setCandidatas(resultado.reservas);
+      // Con una sola coincidencia se muestra directo, igual que al buscar por código.
+      if (resultado.reservas.length === 1) setReserva(resultado.reservas[0]);
+    } finally {
+      setBuscando(false);
+    }
+  }
 
   useEffect(() => {
     obtenerConfiguracionPago().then(({ modoSinpe }) => setModoSinpe(modoSinpe));
@@ -78,29 +125,116 @@ export function ReservationLookup() {
             <Search className="size-5" />
           </div>
           <CardTitle className="text-xl">Consultá tu reserva</CardTitle>
-          <CardDescription>Ingresá el código que recibiste al reservar.</CardDescription>
+          <CardDescription>
+            {porTelefono
+              ? "Ingresá el teléfono que usaste al reservar y la fecha de tu reserva."
+              : "Ingresá el código que recibiste al reservar."}
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-6">
-          <form className="flex gap-3" onSubmit={manejarEnvio}>
-            <div className="flex-1">
-              <Label htmlFor="codigo" className="sr-only">
-                Código de reserva
-              </Label>
-              <Input
-                id="codigo"
-                value={codigo}
-                onChange={(e) => setCodigo(e.target.value)}
-                placeholder="SRP-XXXXX"
-                className="rounded-xl"
-              />
-            </div>
-            <Button type="submit" className="rounded-xl" disabled={buscando}>
-              {buscando ? "Buscando..." : "Buscar"}
-            </Button>
-          </form>
+          {!porTelefono ? (
+            <form className="flex gap-3" onSubmit={manejarEnvio}>
+              <div className="flex-1">
+                <Label htmlFor="codigo" className="sr-only">
+                  Código de reserva
+                </Label>
+                <Input
+                  id="codigo"
+                  value={codigo}
+                  onChange={(e) => setCodigo(e.target.value)}
+                  placeholder="SRP-XXXXX"
+                  className="rounded-xl"
+                />
+              </div>
+              <Button type="submit" className="rounded-xl" disabled={buscando}>
+                {buscando ? "Buscando..." : "Buscar"}
+              </Button>
+            </form>
+          ) : (
+            <form className="flex flex-col gap-3" onSubmit={buscarPorTelefono}>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="telefono-busqueda">Teléfono</Label>
+                  <Input
+                    id="telefono-busqueda"
+                    type="tel"
+                    inputMode="tel"
+                    value={telefono}
+                    onChange={(e) => setTelefono(e.target.value)}
+                    placeholder="8888-8888"
+                    required
+                    className="rounded-xl"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="fecha-busqueda">Fecha de la reserva</Label>
+                  <Input
+                    id="fecha-busqueda"
+                    type="date"
+                    value={fechaBuscada}
+                    onChange={(e) => setFechaBuscada(e.target.value)}
+                    required
+                    className="rounded-xl"
+                  />
+                </div>
+              </div>
+              <Button type="submit" className="w-fit rounded-xl" disabled={buscando}>
+                {buscando ? "Buscando..." : "Buscar"}
+              </Button>
+            </form>
+          )}
 
-          {reserva === null && (
+          <button
+            type="button"
+            onClick={() => cambiarModo(!porTelefono)}
+            className="text-primary w-fit text-sm font-medium underline underline-offset-4"
+          >
+            {porTelefono ? "Tengo el código de mi reserva" : "¿No tenés el código? Buscala con tu teléfono y la fecha"}
+          </button>
+
+          {!porTelefono && reserva === null && (
             <p className="text-muted-foreground text-sm">No encontramos ninguna reserva con ese código.</p>
+          )}
+
+          {errorTelefono && <p className="text-destructive text-sm">{errorTelefono}</p>}
+
+          {porTelefono && candidatas !== null && candidatas.length === 0 && (
+            <p className="text-muted-foreground text-sm">
+              No encontramos reservas con ese teléfono en esa fecha. Revisá que sea el mismo número que usaste al
+              reservar y que la fecha sea la de tu reserva (no la del día en que reservaste).
+            </p>
+          )}
+
+          {porTelefono && candidatas !== null && candidatas.length > 1 && (
+            <div className="flex flex-col gap-2">
+              <p className="text-sm font-medium">Encontramos {candidatas.length} reservas. Elegí la tuya:</p>
+              <ul className="flex flex-col gap-2">
+                {candidatas.map((c) => {
+                  const hora = c.lotes[0]?.heats[0]?.horaInicio;
+                  const seleccionada = reserva?.codigoPublico === c.codigoPublico;
+                  return (
+                    <li key={c.codigoPublico}>
+                      <button
+                        type="button"
+                        onClick={() => setReserva(c)}
+                        aria-pressed={seleccionada}
+                        className={`flex w-full flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 text-left text-sm ${
+                          seleccionada ? "border-primary bg-primary/10" : "hover:bg-accent"
+                        }`}
+                      >
+                        <span className="font-medium">
+                          {hora ? formatoHora12(hora) : "Sin hora"} · {c.cantidadPersonas}{" "}
+                          {c.cantidadPersonas === 1 ? "persona" : "personas"}
+                        </span>
+                        <span className="text-muted-foreground">
+                          {ETIQUETA_ESTADO[c.estado] ?? c.estado} · {c.codigoPublico}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           )}
 
           {reserva && (

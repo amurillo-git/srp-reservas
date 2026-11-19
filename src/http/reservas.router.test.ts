@@ -400,6 +400,79 @@ describe("GET /api/reservations/:publicCode", () => {
   });
 });
 
+describe("POST /api/reservations/lookup (consulta publica por telefono y fecha)", () => {
+  async function crearReservaDe(app: Express, telefono: string, hora = "09:00"): Promise<string> {
+    const creacion = await request(app)
+      .post("/api/reservations")
+      .set("Idempotency-Key", `idem-lookup-${Date.now()}-${Math.random()}`)
+      .send({
+        serviceId: SERVICIO_ID, date: FECHA_ISO, startTime: hora, partySize: 3,
+        customer: { name: "Ana Privada", phone: telefono },
+        ...ACEPTACION_NORMAS,
+      });
+    return creacion.body.codigoPublico as string;
+  }
+
+  it("devuelve la reserva con ese telefono (en cualquier formato) y fecha, sin datos personales", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    const codigo = await crearReservaDe(app, "+506 8888-0000");
+
+    const respuesta = await request(app).post("/api/reservations/lookup").send({ phone: "8888 0000", date: FECHA_ISO });
+
+    expect(respuesta.status).toBe(200);
+    expect(respuesta.body.reservas).toHaveLength(1);
+    expect(respuesta.body.reservas[0]).toMatchObject({ codigoPublico: codigo, fecha: FECHA_ISO, cantidadPersonas: 3 });
+    expect(JSON.stringify(respuesta.body)).not.toContain("Ana Privada");
+    expect(JSON.stringify(respuesta.body)).not.toContain("8888");
+  });
+
+  it("telefono o fecha que no coinciden: lista vacia (200)", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const app = crearApp(comoPrisma(fake));
+    await crearReservaDe(app, "8888-0000");
+
+    const otroTelefono = await request(app).post("/api/reservations/lookup").send({ phone: "8888-0001", date: FECHA_ISO });
+    const otraFecha = await request(app).post("/api/reservations/lookup").send({ phone: "8888-0000", date: "2026-09-14" });
+
+    expect(otroTelefono.status).toBe(200);
+    expect(otroTelefono.body.reservas).toEqual([]);
+    expect(otraFecha.body.reservas).toEqual([]);
+  });
+
+  it("valida los parametros: telefono con menos de 8 digitos, fecha mal formada o inexistente", async () => {
+    const app = crearApp(comoPrisma(new FakePrisma()));
+    const consultar = (cuerpo: Record<string, unknown>) => request(app).post("/api/reservations/lookup").send(cuerpo);
+
+    expect((await consultar({ date: FECHA_ISO })).status).toBe(400);
+    expect((await consultar({ phone: "8888-0000" })).status).toBe(400);
+    expect((await consultar({ phone: "8888", date: FECHA_ISO })).status).toBe(400);
+    expect((await consultar({ phone: "8888-0000", date: "13/09/2026" })).status).toBe(400);
+    expect((await consultar({ phone: "8888-0000", date: "2026-13-45" })).status).toBe(400);
+  });
+
+  it("limita los intentos por conexion: pasado el limite responde 429 con Retry-After", async () => {
+    const app = crearApp(comoPrisma(new FakePrisma()));
+    const consultar = () => request(app).post("/api/reservations/lookup").send({ phone: "8888-0000", date: FECHA_ISO });
+
+    for (let i = 0; i < 20; i++) expect((await consultar()).status).toBe(200);
+    const bloqueado = await consultar();
+
+    expect(bloqueado.status).toBe(429);
+    expect(Number(bloqueado.headers["retry-after"])).toBeGreaterThan(0);
+  });
+
+  it("no choca con la consulta por codigo: /reservations/lookup no se toma como un codigo", async () => {
+    const app = crearApp(comoPrisma(new FakePrisma()));
+
+    const respuesta = await request(app).get("/api/reservations/SRP-NO-EXISTE");
+
+    expect(respuesta.status).toBe(404);
+  });
+});
+
 describe("flujo SINPE (POST .../sinpe-evidence, admin confirm/reject-sinpe)", () => {
   async function crearReservaTemporal(app: Express): Promise<string> {
     const creacion = await request(app)

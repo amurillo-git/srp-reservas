@@ -189,6 +189,33 @@ export async function iniciarIntencionSinpe(
   return { ok: true, numeroSinpe: cuerpo.numeroSinpe, monto: cuerpo.monto, moneda: cuerpo.moneda };
 }
 
+export type ResultadoBusquedaPorTelefono =
+  | { readonly ok: true; readonly reservas: readonly ReservaPublica[] }
+  | { readonly ok: false; readonly motivo: "DEMASIADOS_INTENTOS" | "DATOS_INVALIDOS" | "ERROR" };
+
+/** Busca reservas por el telefono usado al reservar y la fecha de la reserva
+ * (para quien perdio el codigo). Va por POST para que el telefono no quede en
+ * la URL. */
+export async function buscarReservasPorTelefono(
+  telefono: string,
+  fecha: string,
+): Promise<ResultadoBusquedaPorTelefono> {
+  try {
+    const respuesta = await fetch(`${BASE_URL}/reservations/lookup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone: telefono, date: fecha }),
+    });
+    if (respuesta.status === 429) return { ok: false, motivo: "DEMASIADOS_INTENTOS" };
+    if (respuesta.status === 400) return { ok: false, motivo: "DATOS_INVALIDOS" };
+    if (!respuesta.ok) return { ok: false, motivo: "ERROR" };
+    const cuerpo = await respuesta.json();
+    return { ok: true, reservas: cuerpo.reservas };
+  } catch {
+    return { ok: false, motivo: "ERROR" };
+  }
+}
+
 export async function consultarReserva(codigoPublico: string): Promise<ReservaPublica | null> {
   const respuesta = await fetch(`${BASE_URL}/reservations/${encodeURIComponent(codigoPublico)}`);
   if (respuesta.status === 404) return null;

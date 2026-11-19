@@ -46,6 +46,8 @@ import {
   type MetodoCobroCaja,
   type ResultadoCuenta,
 } from "../services/cuenta-reserva.service.js";
+import { buscarReservasPorTelefonoYFecha } from "../services/consulta-publica.service.js";
+import { crearLimitadorIntentos } from "./limitador-intentos.js";
 import { iniciarSesion } from "../services/auth.service.js";
 import { requireAuth, type RequestAutenticado } from "./auth.middleware.js";
 import { listarEventos, registrarEvento, type ActorAuditoria } from "../services/auditoria.service.js";
@@ -206,6 +208,8 @@ function leerRangoFechas(req: Request, res: Response): { serviceId: string; from
 
 export function crearRouterReservas(prisma: PrismaClient): Router {
   const router = Router();
+  // 20 busquedas por minuto y por IP en la consulta publica por telefono y fecha.
+  const limitarBusquedaPublica = crearLimitadorIntentos({ max: 20, ventanaMs: 60_000 });
 
   router.get(
     "/services",
@@ -402,6 +406,33 @@ export function crearRouterReservas(prisma: PrismaClient): Router {
       // NO_DISPONIBLE y CONFLICTO_CONCURRENCIA son ambos "no se pudo crear
       // ahora mismo, intente de nuevo con datos frescos": 409.
       res.status(409).json(resultado);
+    }),
+  );
+
+  // Consulta publica por telefono y fecha (alternativa al codigo). Debe ir
+  // ANTES de "/reservations/:publicCode" para que "lookup" no se tome como un
+  // codigo. Limitada por IP: el telefono es un dato facil de conocer y sin
+  // limite se podria recorrer en serie. No devuelve nombre ni telefono. Es POST
+  // (no GET) para que el telefono viaje en el cuerpo y no en la URL, que
+  // quedaria en los registros del servidor y del proxy.
+  router.post(
+    "/reservations/lookup",
+    conManejoDeErrores(async (req, res) => {
+      const limite = limitarBusquedaPublica(req.ip ?? "desconocida");
+      if (!limite.permitido) {
+        res.setHeader("Retry-After", String(limite.reintentarEnSeg));
+        return enviarError(res, 429, "Demasiados intentos. Probá de nuevo en un minuto.");
+      }
+
+      const { phone, date } = req.body ?? {};
+      if (typeof phone !== "string" || typeof date !== "string") {
+        return enviarError(res, 400, "phone y date son requeridos");
+      }
+      const reservas = await buscarReservasPorTelefonoYFecha(prisma, phone, date);
+      if (reservas === null) {
+        return enviarError(res, 400, "phone debe tener al menos 8 digitos y date ser una fecha valida (YYYY-MM-DD)");
+      }
+      res.json({ reservas });
     }),
   );
 
