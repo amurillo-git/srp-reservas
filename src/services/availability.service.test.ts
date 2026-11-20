@@ -5,6 +5,7 @@ import {
   consultarDisponibilidad,
   consultarDisponibilidadDelDia,
   consultarDisponibilidadRepetida,
+  listarHorasDisponibles,
 } from "./availability.service.js";
 import { FakePrisma } from "./testing/fake-prisma.js";
 
@@ -158,6 +159,60 @@ describe("consultarDisponibilidad", () => {
       servicioId: SERVICIO_ID, fecha: FECHA_ISO, horaInicioCandidata: "09:00", cantidadPersonas: 3,
     });
     expect(noCabe.disponible).toBe(false);
+  });
+
+  it("una reserva PAGADA (saldo ya cobrado) sigue ocupando su cupo: no se puede sobrevender el heat (6.5)", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const lote = fake.crearLote({
+      id: "lote-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE, horaInicio: "09:00", horaFinUltimoHeat: "09:15",
+      horaInicioLimpieza: "09:15", horaFinLimpieza: "09:30", cantidadHeats: 1,
+    });
+    const heat = fake.crearHeat({
+      id: "heat-1", loteId: lote.id, servicioId: SERVICIO_ID, fecha: FECHA_DATE,
+      horaInicio: "09:00", horaFin: "09:15", posicionEnLote: 1,
+    });
+    fake.crearReservaConAsignacion({
+      heatId: heat.id, servicioId: SERVICIO_ID, fecha: FECHA_DATE, cantidadParticipantes: 4, estado: "CONFIRMADA",
+    }).reserva.estado = "PAGADA";
+
+    // Ocupado real = 4 (PAGADA); libre = 1.
+    const unaPersona = await consultarDisponibilidad(comoPrisma(fake), {
+      servicioId: SERVICIO_ID, fecha: FECHA_ISO, horaInicioCandidata: "09:00", cantidadPersonas: 1,
+    });
+    const dosPersonas = await consultarDisponibilidad(comoPrisma(fake), {
+      servicioId: SERVICIO_ID, fecha: FECHA_ISO, horaInicioCandidata: "09:00", cantidadPersonas: 2,
+    });
+
+    expect(unaPersona.disponible).toBe(true);
+    expect(dosPersonas.disponible).toBe(false);
+  });
+
+  it("14 personas a las 9:00 (reserva ya PAGADA): no se ofrece ni se acepta una de 8 a las 9:30", async () => {
+    const fake = new FakePrisma();
+    crearFixtureBase(fake);
+    const primera = await confirmarReserva(comoPrisma(fake), {
+      servicioId: SERVICIO_ID, fecha: FECHA_ISO, horaInicioCandidata: "09:00", cantidadPersonas: 14,
+      cliente: { nombre: "Ana", telefono: "8888-0000" }, claveIdempotencia: "idem-14",
+    });
+    expect(primera.exito).toBe(true);
+    fake.reservas[0]!.estado = "PAGADA";
+
+    const horas = await listarHorasDisponibles(comoPrisma(fake), SERVICIO_ID, FECHA_ISO, 8);
+    const segunda = await confirmarReserva(comoPrisma(fake), {
+      servicioId: SERVICIO_ID, fecha: FECHA_ISO, horaInicioCandidata: "09:30", cantidadPersonas: 8,
+      cliente: { nombre: "Beto", telefono: "8888-0001" }, claveIdempotencia: "idem-8",
+    });
+
+    expect(horas).not.toContain("09:30");
+    expect(segunda.exito).toBe(false);
+    // Ningun heat supera su capacidad de 5.
+    for (const h of fake.heats) {
+      const total = fake.asignaciones
+        .filter((a) => a.heatId === h.id && a.estado === "ACTIVA")
+        .reduce((suma, a) => suma + a.cantidadParticipantes, 0);
+      expect(total).toBeLessThanOrEqual(5);
+    }
   });
 
   it("un bloqueo administrativo impide usar ese intervalo (6.6, 8.2)", async () => {

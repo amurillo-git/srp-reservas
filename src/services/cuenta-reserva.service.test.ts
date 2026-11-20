@@ -358,6 +358,50 @@ describe("modificarLinea", () => {
   });
 });
 
+describe("modificarLinea: la cantidad de personas de la reserva sigue a la linea reservada", () => {
+  it("bajar las personas de la linea reservada actualiza la cantidad de personas de la reserva", async () => {
+    const { prisma, fake } = escenario({ cantidadPersonas: 15, montoTotal: 97500, montoDeposito: 48750, montoSaldo: 48750 });
+    const base = cuentaDe(await obtenerCuenta(prisma, "SRP-0001")).lineas[0]!;
+
+    const cuenta = cuentaDe(await modificarLinea(prisma, "SRP-0001", base.id, { cantidad: 14 }));
+
+    expect(fake.reservas[0]!.cantidadPersonas).toBe(14);
+    expect(cuenta.cantidadPersonas).toBe(14);
+    expect(cuenta.totalConsumido).toBe(91000);
+  });
+
+  it("subir las personas de la linea reservada tambien actualiza la cantidad de la reserva", async () => {
+    const { prisma, fake } = escenario();
+    const base = cuentaDe(await obtenerCuenta(prisma, "SRP-0001")).lineas[0]!;
+
+    await modificarLinea(prisma, "SRP-0001", base.id, { cantidad: 16 });
+
+    expect(fake.reservas[0]!.cantidadPersonas).toBe(16);
+  });
+
+  it("con dos heats reservados, la reserva queda con la mayor cantidad de sus lineas reservadas", async () => {
+    const { prisma, fake } = escenario({ cantidadPersonas: 4, repeticiones: 2, montoTotal: 56000, montoDeposito: 28000, montoSaldo: 28000 });
+    const [primera, segunda] = cuentaDe(await obtenerCuenta(prisma, "SRP-0001")).lineas;
+
+    await modificarLinea(prisma, "SRP-0001", primera!.id, { cantidad: 3 });
+    expect(fake.reservas[0]!.cantidadPersonas).toBe(4); // la otra linea sigue en 4
+
+    await modificarLinea(prisma, "SRP-0001", segunda!.id, { cantidad: 3 });
+    expect(fake.reservas[0]!.cantidadPersonas).toBe(3);
+  });
+
+  it("cambiar una linea extra (heat extra, ninos) o solo la duracion no cambia la cantidad de la reserva", async () => {
+    const { prisma, fake } = escenario();
+    const base = cuentaDe(await obtenerCuenta(prisma, "SRP-0001")).lineas[0]!;
+    const conExtra = cuentaDe(await agregarLinea(prisma, "SRP-0001", { tipo: "HEAT", duracionMin: 15, personas: 10 }));
+
+    await modificarLinea(prisma, "SRP-0001", conExtra.lineas[1]!.id, { cantidad: 6 });
+    await modificarLinea(prisma, "SRP-0001", base.id, { duracionMin: 10 });
+
+    expect(fake.reservas[0]!.cantidadPersonas).toBe(14);
+  });
+});
+
 describe("eliminarLinea", () => {
   it("quita la linea y recalcula el total y el saldo", async () => {
     const { prisma, fake } = escenario();

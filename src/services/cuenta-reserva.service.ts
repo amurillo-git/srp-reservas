@@ -478,6 +478,20 @@ export async function modificarLinea(
         monto: redondear(precioUnitario * cantidad),
       },
     });
+
+    // La linea "reservado" es la cantidad de personas de la reserva: si cambia,
+    // la reserva (y lo que se ve en las listas) debe mostrar la cantidad nueva.
+    // Con varios heats reservados queda la mayor. No toca HeatAllocation: igual
+    // que ajustarAsistentesReales, solo registra quienes realmente son; para
+    // mover cupo se usa "Cambiar personas".
+    if (linea.esBase && cambios.cantidad !== undefined) {
+      const lineas = await tx.consumoReserva.findMany({ where: { reservationId: reserva.id } });
+      const reservadas = lineas.filter((l) => l.esBase).map((l) => l.cantidad);
+      await tx.reservation.update({
+        where: { id: reserva.id },
+        data: { cantidadPersonas: Math.max(...reservadas) },
+      });
+    }
     return null;
   });
 }

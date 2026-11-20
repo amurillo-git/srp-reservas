@@ -20,7 +20,7 @@ import { horaAMinutos, type FechaISO, type HoraISO, type IdServicio } from "../m
  * pendiente de validacion siempre (6.9.5). RECHAZADA/CANCELADA/EXPIRADA no
  * bloquean un nuevo bloqueo. */
 function reservaOcupaCapacidad(estado: string, expiraEn: Date | null, ahora: Date): boolean {
-  if (estado === "CONFIRMADA" || estado === "PENDIENTE_VALIDACION_SINPE") return true;
+  if (estado === "CONFIRMADA" || estado === "PAGADA" || estado === "PENDIENTE_VALIDACION_SINPE") return true;
   if (estado === "TEMPORAL") return expiraEn === null || expiraEn > ahora;
   return false;
 }

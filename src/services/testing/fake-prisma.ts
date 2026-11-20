@@ -702,7 +702,7 @@ export class FakePrisma {
       take,
     }: {
       where: {
-        estado?: string;
+        estado?: string | { in: readonly string[] };
         servicioId?: Id;
         fecha?: { gte?: Date; lte?: Date };
         expiraEn?: { lte: Date };
@@ -712,7 +712,8 @@ export class FakePrisma {
       take?: number;
     }) => {
       let filas = this.reservas.filter((r) => {
-        if (where.estado !== undefined && r.estado !== where.estado) return false;
+        if (typeof where.estado === "string" && r.estado !== where.estado) return false;
+        if (typeof where.estado === "object" && !where.estado.in.includes(r.estado)) return false;
         if (where.servicioId !== undefined && r.servicioId !== where.servicioId) return false;
         if (where.fecha?.gte !== undefined && r.fecha.getTime() < where.fecha.gte.getTime()) return false;
         if (where.fecha?.lte !== undefined && r.fecha.getTime() > where.fecha.lte.getTime()) return false;

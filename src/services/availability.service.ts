@@ -228,7 +228,9 @@ async function construirContextoDisponibilidad(
       for (const asignacion of heat.asignaciones) {
         if (asignacion.reservationId === reservationIdAIgnorar) continue;
         const r = asignacion.reservation;
-        if (r.estado === "CONFIRMADA") {
+        // PAGADA = confirmada que ademas ya pago el saldo: sigue ocupando su
+        // cupo hasta que se vive la experiencia (olvidarla sobrevendia el heat).
+        if (r.estado === "CONFIRMADA" || r.estado === "PAGADA") {
           personasConfirmadas += asignacion.cantidadParticipantes;
         } else if (
           r.estado === "PENDIENTE_VALIDACION_SINPE" ||

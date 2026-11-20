@@ -148,6 +148,23 @@ describe("depositosPorMetodoPago", () => {
   });
 });
 
+describe("depositosPorMetodoPago con reservas PAGADA", () => {
+  it("una reserva PAGADA (saldo cobrado) tambien tiene su deposito pagado y se suma", async () => {
+    const fake = new FakePrisma();
+    crearReserva(fake, { id: "1", fecha: new Date("2026-09-10"), estado: "CONFIRMADA", montoDeposito: 5000 });
+    crearReserva(fake, { id: "2", fecha: new Date("2026-09-10"), estado: "PAGADA", montoDeposito: 3000 });
+    crearReserva(fake, { id: "3", fecha: new Date("2026-09-10"), estado: "PAGADA", montoDeposito: 2000, pagoTarjetaSesionId: "sesion-1" });
+    crearReserva(fake, { id: "4", fecha: new Date("2026-09-10"), estado: "CANCELADA", montoDeposito: 9999 });
+
+    const resultado = await depositosPorMetodoPago(comoPrisma(fake), SERVICIO_ID, "2026-09-05", "2026-09-15");
+
+    expect(resultado).toEqual([
+      { metodo: "SINPE", totalDepositos: 8000, cantidadReservas: 2 },
+      { metodo: "TARJETA", totalDepositos: 2000, cantidadReservas: 1 },
+    ]);
+  });
+});
+
 describe("reservasDelDia", () => {
   it("lista todas las reservas de la fecha sin filtrar por estado", async () => {
     const fake = new FakePrisma();

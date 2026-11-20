@@ -138,9 +138,10 @@ export interface DepositoPorMetodo {
   readonly cantidadReservas: number;
 }
 
-/** Depositos por metodo de pago (25): solo reservas CONFIRMADA (deposito
- * efectivamente cobrado). El metodo se infiere de `pagoTarjetaSesionId`
- * porque hoy CONFIRMADA solo se alcanza por esas dos vias (6.9, 6.8). */
+/** Depositos por metodo de pago (25): reservas CONFIRMADA y PAGADA (en ambas
+ * el deposito ya se cobro; PAGADA ademas pago el saldo). El metodo se infiere
+ * de `pagoTarjetaSesionId` porque el deposito solo se alcanza por esas dos
+ * vias (6.9, 6.8). */
 export async function depositosPorMetodoPago(
   prisma: PrismaClient,
   servicioId: string,
@@ -148,7 +149,7 @@ export async function depositosPorMetodoPago(
   hasta: FechaISO,
 ): Promise<readonly DepositoPorMetodo[]> {
   const reservas = await prisma.reservation.findMany({
-    where: { servicioId, estado: "CONFIRMADA", fecha: rangoFechas(desde, hasta) },
+    where: { servicioId, estado: { in: ["CONFIRMADA", "PAGADA"] }, fecha: rangoFechas(desde, hasta) },
   });
 
   const totales = new Map<MetodoPago, { totalDepositos: number; cantidadReservas: number }>();

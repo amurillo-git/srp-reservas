@@ -47,6 +47,28 @@ describe("crearBloqueo", () => {
     expect(fake.bloqueos).toHaveLength(0);
   });
 
+  it("9.22: una reserva PAGADA tambien es conflicto (sigue ocupando su heat)", async () => {
+    const fake = new FakePrisma();
+    const lote = fake.crearLote({
+      id: "lote-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE,
+      horaInicio: "10:00", horaFinUltimoHeat: "10:15",
+      horaInicioLimpieza: "10:15", horaFinLimpieza: "10:30", cantidadHeats: 1,
+    });
+    fake.crearHeat({ id: "heat-1", loteId: lote.id, servicioId: SERVICIO_ID, fecha: FECHA_DATE, horaInicio: "10:00", horaFin: "10:15", posicionEnLote: 1 });
+    fake.crearReservaConAsignacion({ heatId: "heat-1", servicioId: SERVICIO_ID, fecha: FECHA_DATE, cantidadParticipantes: 3, estado: "CONFIRMADA" })
+      .reserva.estado = "PAGADA";
+
+    const resultado = await crearBloqueo(comoPrisma(fake), {
+      servicioId: SERVICIO_ID, fecha: FECHA_ISO, horaInicio: "10:00", horaFin: "10:15",
+    });
+
+    expect(resultado.ok).toBe(false);
+    if (resultado.ok) return;
+    expect(resultado.motivo).toBe("CONFLICTO");
+    expect(resultado.reservasEnConflicto).toHaveLength(1);
+    expect(fake.bloqueos).toHaveLength(0);
+  });
+
   it("9.22: crea el bloqueo pese al conflicto si se pasa forzar:true", async () => {
     const fake = new FakePrisma();
     const lote = fake.crearLote({
